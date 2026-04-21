@@ -351,7 +351,14 @@ async function uploadOneImage(file, subfolder = "") {
     }
 
     const json = await resp.json();
-    return json?.name;
+    // ComfyUI returns {name: "file.png", subfolder: "path/to/dir"} separately.
+    // We need to combine them so the annotated path preserves folder structure.
+    const returnedName = json?.name || file.name;
+    const returnedSubfolder = json?.subfolder || "";
+    if (returnedSubfolder) {
+        return returnedSubfolder + "/" + returnedName;
+    }
+    return returnedName;
 }
 
 async function uploadFilesSequential(node, files, { replace = false, preserveFolders = false } = {}) {
