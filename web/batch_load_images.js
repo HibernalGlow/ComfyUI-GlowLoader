@@ -317,7 +317,7 @@ function ensureGlobalDragDropPrevention() {
 
             const files = Array.from(e.dataTransfer?.files || []);
             if (files.length === 0) return;
-            await uploadFilesSequential(hit.node, files, { replace: false });
+            await uploadFilesSequential(hit.node, files, { replace: false, preserveFolders: true });
             hit.redraw?.();
         },
         { capture: true }
@@ -333,10 +333,13 @@ function ensureGlobalDragDropPrevention() {
     );
 }
 
-async function uploadOneImage(file) {
+async function uploadOneImage(file, subfolder = "") {
     const body = new FormData();
     body.append("image", file, file.name);
     body.append("type", "input");
+    if (subfolder) {
+        body.append("subfolder", subfolder);
+    }
 
     const resp = await api.fetchApi("/upload/image", {
         method: "POST",
@@ -351,7 +354,7 @@ async function uploadOneImage(file) {
     return json?.name;
 }
 
-async function uploadFilesSequential(node, files, { replace = false } = {}) {
+async function uploadFilesSequential(node, files, { replace = false, preserveFolders = false } = {}) {
     const w = getImageListWidget(node);
     if (!w) return [];
 
@@ -365,7 +368,17 @@ async function uploadFilesSequential(node, files, { replace = false } = {}) {
         const extOk = name.endsWith(".webp") || name.endsWith(".avif") || name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".gif") || name.endsWith(".bmp") || name.endsWith(".tiff");
         if (file?.type && !file.type.startsWith("image/") && !extOk) continue;
         if (!file?.type && !extOk) continue;
-        const uploadedName = await uploadOneImage(file);
+
+        // Extract subfolder from webkitRelativePath for folder uploads
+        let subfolder = "";
+        if (preserveFolders && file.webkitRelativePath) {
+            const parts = file.webkitRelativePath.split("/");
+            if (parts.length > 1) {
+                subfolder = parts.slice(0, -1).join("/");
+            }
+        }
+
+        const uploadedName = await uploadOneImage(file, subfolder);
         if (uploadedName) uploaded.push(uploadedName);
     }
 
@@ -385,7 +398,7 @@ function openMultiSelect(node, { replace = false } = {}) {
     input.onchange = async (e) => {
         try {
             const files = Array.from(e.target.files || []);
-            await uploadFilesSequential(node, files, { replace });
+            await uploadFilesSequential(node, files, { replace, preserveFolders: true });
         } finally {
             document.body.removeChild(input);
         }
@@ -417,7 +430,7 @@ function openFolderSelect(node, { replace = false } = {}) {
             });
             // keep stable ordering
             files.sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
-            await uploadFilesSequential(node, files, { replace });
+            await uploadFilesSequential(node, files, { replace, preserveFolders: true });
         } finally {
             document.body.removeChild(input);
         }
@@ -522,7 +535,7 @@ function createBrowserUI(node) {
 
     const handleDropFiles = async (files, { replace = false } = {}) => {
         if (!files || files.length === 0) return;
-        await uploadFilesSequential(node, files, { replace });
+        await uploadFilesSequential(node, files, { replace, preserveFolders: true });
         redraw();
     };
 
