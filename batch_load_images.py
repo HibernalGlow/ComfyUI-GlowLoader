@@ -28,7 +28,7 @@ class BatchLoadImages:
             }
         }
 
-    CATEGORY = "ComfyUI-IAI666-BatchLoadImages"
+    CATEGORY = "ComfyUI-GlowLoader"
 
     RETURN_TYPES = ("IMAGE", "STRING")
     RETURN_NAMES = ("images", "filenames")

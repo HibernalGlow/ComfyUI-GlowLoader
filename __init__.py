@@ -9,7 +9,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "BatchLoadImages": "ComfyUI-IAI666-BatchLoadImages",
+    "BatchLoadImages": "ComfyUI-GlowLoader",
     "VNCCS_PositionControl": "VNCCS Position Control (Prompt)",
     "VNCCS_VisualPositionControl": "VNCCS Visual Position Control (Prompt)",
 }
