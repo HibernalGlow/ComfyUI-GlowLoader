@@ -17,6 +17,28 @@ except ImportError:
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".avif", ".bmp", ".gif", ".tiff", ".tif"}
 
+# Separator used in image_list to encode the original relative path.
+# Format per line:  <comfy_filename> | <original_relative_path>
+# Example:  photo.png|sub/deep/photo.png
+# If no | is present, the original_relative_path equals the comfy_filename.
+PATH_SEPARATOR = "|"
+
+
+def _parse_image_list_entry(entry):
+    """Parse a single image_list line into (comfy_name, original_relpath).
+
+    Returns (comfy_name, original_relpath) where:
+    - comfy_name: the filename ComfyUI can locate via annotated_filepath
+    - original_relpath: the original relative path (may include subfolders)
+    """
+    entry = entry.strip()
+    if not entry:
+        return None, None
+    if PATH_SEPARATOR in entry:
+        parts = entry.split(PATH_SEPARATOR, 1)
+        return parts[0].strip(), parts[1].strip()
+    return entry, entry
+
 
 class BatchLoadImages:
     @classmethod
@@ -44,20 +66,20 @@ class BatchLoadImages:
     OUTPUT_NODE = True
 
     def load_images(self, image_list: str, max_images: int, mode: str, index: int):
-        names = [x.strip() for x in (image_list or "").splitlines()]
-        names = [x for x in names if x]
+        entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
+        entries = [(c, p) for c, p in entries if c]
 
         if max_images and max_images > 0:
-            names = names[:max_images]
+            entries = entries[:max_images]
 
         if mode == "single":
             if index < 0:
                 index = 0
-            if index >= len(names):
-                index = len(names) - 1
-            names = [names[index]]
+            if index >= len(entries):
+                index = len(entries) - 1
+            entries = [entries[index]]
 
-        if len(names) == 0:
+        if len(entries) == 0:
             raise ValueError("image_list is empty")
 
         output_images = []
@@ -66,11 +88,11 @@ class BatchLoadImages:
 
         excluded_formats = ["MPO"]
 
-        for name in names:
-            if not folder_paths.exists_annotated_filepath(name):
+        for comfy_name, original_relpath in entries:
+            if not folder_paths.exists_annotated_filepath(comfy_name):
                 continue
 
-            image_path = folder_paths.get_annotated_filepath(name)
+            image_path = folder_paths.get_annotated_filepath(comfy_name)
             img = node_helpers.pillow(Image.open, image_path)
 
             w, h = None, None
@@ -104,9 +126,9 @@ class BatchLoadImages:
 
             output_images.append(image_tensor)
             # filename only (no directory part)
-            output_names.append(os.path.basename(name))
-            # full annotated path for saving
-            output_paths.append(name)
+            output_names.append(os.path.basename(original_relpath))
+            # full original relative path for saving (preserves folder structure)
+            output_paths.append(original_relpath)
 
         if len(output_images) == 0:
             raise ValueError("No valid images found")
@@ -117,25 +139,26 @@ class BatchLoadImages:
     @classmethod
     def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int):
         m = hashlib.sha256()
-        names = [x.strip() for x in (image_list or "").splitlines()]
-        names = [x for x in names if x]
+        entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
+        entries = [(c, p) for c, p in entries if c]
         if max_images and max_images > 0:
-            names = names[:max_images]
+            entries = entries[:max_images]
 
         if mode == "single":
             if index < 0:
                 index = 0
-            if index >= len(names):
-                index = len(names) - 1
-            names = names[:1] if len(names) == 0 else [names[index]]
+            if index >= len(entries):
+                index = len(entries) - 1
+            entries = entries[:1] if len(entries) == 0 else [entries[index]]
 
         m.update(str(mode).encode("utf-8"))
         m.update(str(index).encode("utf-8"))
         m.update(str(max_images).encode("utf-8"))
-        for name in names:
-            m.update(name.encode("utf-8"))
-            if folder_paths.exists_annotated_filepath(name):
-                image_path = folder_paths.get_annotated_filepath(name)
+        for comfy_name, original_relpath in entries:
+            m.update(comfy_name.encode("utf-8"))
+            m.update(original_relpath.encode("utf-8"))
+            if folder_paths.exists_annotated_filepath(comfy_name):
+                image_path = folder_paths.get_annotated_filepath(comfy_name)
                 if os.path.isfile(image_path):
                     with open(image_path, "rb") as f:
                         m.update(f.read())
@@ -143,25 +166,25 @@ class BatchLoadImages:
 
     @classmethod
     def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int):
-        names = [x.strip() for x in (image_list or "").splitlines()]
-        names = [x for x in names if x]
+        entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
+        entries = [(c, p) for c, p in entries if c]
         if max_images and max_images > 0:
-            names = names[:max_images]
+            entries = entries[:max_images]
 
         if mode == "single":
-            if len(names) == 0:
+            if len(entries) == 0:
                 return "image_list is empty"
             if index < 0:
                 return "index must be >= 0"
-            if index >= len(names):
-                return f"index out of range (0..{len(names)-1})"
+            if index >= len(entries):
+                return f"index out of range (0..{len(entries)-1})"
 
-        if len(names) == 0:
+        if len(entries) == 0:
             return "image_list is empty"
 
         valid = False
-        for name in names:
-            if folder_paths.exists_annotated_filepath(name):
+        for comfy_name, _ in entries:
+            if folder_paths.exists_annotated_filepath(comfy_name):
                 valid = True
                 break
 

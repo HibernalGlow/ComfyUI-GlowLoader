@@ -333,13 +333,12 @@ function ensureGlobalDragDropPrevention() {
     );
 }
 
-async function uploadOneImage(file, subfolder = "") {
+async function uploadOneImage(file) {
+    // Always upload flat to ComfyUI input directory.
+    // The original folder structure is encoded in the image_list entry instead.
     const body = new FormData();
     body.append("image", file, file.name);
     body.append("type", "input");
-    if (subfolder) {
-        body.append("subfolder", subfolder);
-    }
 
     const resp = await api.fetchApi("/upload/image", {
         method: "POST",
@@ -351,14 +350,33 @@ async function uploadOneImage(file, subfolder = "") {
     }
 
     const json = await resp.json();
-    // ComfyUI returns {name: "file.png", subfolder: "path/to/dir"} separately.
-    // We need to combine them so the annotated path preserves folder structure.
-    const returnedName = json?.name || file.name;
-    const returnedSubfolder = json?.subfolder || "";
-    if (returnedSubfolder) {
-        return returnedSubfolder + "/" + returnedName;
+    return json?.name || file.name;
+}
+
+/**
+ * Build an image_list entry that encodes both the ComfyUI filename
+ * and the original relative path (for folder structure preservation).
+ * Format:  <comfy_filename>|<original_relative_path>
+ * If no original relpath, just returns the comfy filename.
+ */
+function buildImageListEntry(comfyName, originalRelPath) {
+    if (originalRelPath && originalRelPath !== comfyName) {
+        return comfyName + "|" + originalRelPath;
     }
-    return returnedName;
+    return comfyName;
+}
+
+/**
+ * Parse an image_list entry back into (comfyName, originalRelPath).
+ */
+function parseImageListEntry(entry) {
+    entry = (entry || "").trim();
+    if (!entry) return null;
+    const sep = entry.indexOf("|");
+    if (sep >= 0) {
+        return { comfyName: entry.substring(0, sep).trim(), originalRelPath: entry.substring(sep + 1).trim() };
+    }
+    return { comfyName: entry, originalRelPath: entry };
 }
 
 async function uploadFilesSequential(node, files, { replace = false, preserveFolders = false } = {}) {
@@ -376,17 +394,17 @@ async function uploadFilesSequential(node, files, { replace = false, preserveFol
         if (file?.type && !file.type.startsWith("image/") && !extOk) continue;
         if (!file?.type && !extOk) continue;
 
-        // Extract subfolder from webkitRelativePath for folder uploads
-        let subfolder = "";
+        // Upload file to ComfyUI input (flat, no subfolder)
+        const comfyName = await uploadOneImage(file);
+        if (!comfyName) continue;
+
+        // Determine the original relative path from the folder structure
+        let originalRelPath = comfyName;
         if (preserveFolders && file.webkitRelativePath) {
-            const parts = file.webkitRelativePath.split("/");
-            if (parts.length > 1) {
-                subfolder = parts.slice(0, -1).join("/");
-            }
+            originalRelPath = file.webkitRelativePath;
         }
 
-        const uploadedName = await uploadOneImage(file, subfolder);
-        if (uploadedName) uploaded.push(uploadedName);
+        uploaded.push(buildImageListEntry(comfyName, originalRelPath));
     }
 
     const merged = existing.concat(uploaded);
@@ -405,7 +423,7 @@ function openMultiSelect(node, { replace = false } = {}) {
     input.onchange = async (e) => {
         try {
             const files = Array.from(e.target.files || []);
-            await uploadFilesSequential(node, files, { replace, preserveFolders: true });
+            await uploadFilesSequential(node, files, { replace, preserveFolders: false });
         } finally {
             document.body.removeChild(input);
         }
@@ -497,7 +515,11 @@ function createBrowserUI(node) {
         grid.innerHTML = "";
 
         const frag = document.createDocumentFragment();
-        names.forEach((name, idx) => {
+        names.forEach((rawEntry, idx) => {
+            const parsed = parseImageListEntry(rawEntry);
+            const comfyName = parsed ? parsed.comfyName : rawEntry;
+            const displayLabel = parsed && parsed.originalRelPath !== parsed.comfyName ? parsed.originalRelPath : comfyName;
+
             const cell = document.createElement("div");
             cell.style.cssText = "display:flex;flex-direction:column;gap:3px;";
 
@@ -506,7 +528,7 @@ function createBrowserUI(node) {
                 "position:relative;aspect-ratio:1;border-radius:4px;overflow:hidden;border:1px solid var(--border-color);background:#000;";
 
             const img = document.createElement("img");
-            img.src = getViewUrl(name);
+            img.src = getViewUrl(comfyName);
             img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
 
             const del = document.createElement("button");
@@ -523,8 +545,8 @@ function createBrowserUI(node) {
             };
 
             const label = document.createElement("div");
-            label.textContent = name;
-            label.title = name;
+            label.textContent = displayLabel;
+            label.title = displayLabel;
             label.style.cssText =
                 "font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.9;";
 
