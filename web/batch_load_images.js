@@ -360,10 +360,13 @@ async function uploadFilesSequential(node, files, { replace = false } = {}) {
 
     for (const file of files) {
         if (!file) continue;
-        // skip non-images
-        if (file?.type && !file.type.startsWith("image/")) continue;
-        const name = await uploadOneImage(file);
-        if (name) uploaded.push(name);
+        // skip non-images (allow by MIME type or by extension)
+        const name = (file.name || "").toLowerCase();
+        const extOk = name.endsWith(".webp") || name.endsWith(".avif") || name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".gif") || name.endsWith(".bmp") || name.endsWith(".tiff");
+        if (file?.type && !file.type.startsWith("image/") && !extOk) continue;
+        if (!file?.type && !extOk) continue;
+        const uploadedName = await uploadOneImage(file);
+        if (uploadedName) uploaded.push(uploadedName);
     }
 
     const merged = existing.concat(uploaded);
@@ -374,7 +377,7 @@ async function uploadFilesSequential(node, files, { replace = false } = {}) {
 function openMultiSelect(node, { replace = false } = {}) {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "image/png,image/jpeg";
+    input.accept = "image/png,image/jpeg,image/webp,image/avif,image/avif-sequence";
     input.multiple = true;
     input.style.display = "none";
     document.body.appendChild(input);
@@ -394,7 +397,7 @@ function openMultiSelect(node, { replace = false } = {}) {
 function openFolderSelect(node, { replace = false } = {}) {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "image/png,image/jpeg";
+    input.accept = "image/png,image/jpeg,image/webp,image/avif,image/avif-sequence";
     input.multiple = true;
     input.webkitdirectory = true;
     input.directory = true;
@@ -404,7 +407,7 @@ function openFolderSelect(node, { replace = false } = {}) {
     input.onchange = async (e) => {
         try {
             let files = Array.from(e.target.files || []);
-            const allowExt = new Set([".png", ".jpg", ".jpeg"]);
+            const allowExt = new Set([".png", ".jpg", ".jpeg", ".webp", ".avif"]);
             files = files.filter((f) => {
                 const name = (f?.name || "").toLowerCase();
                 for (const ext of allowExt) {
@@ -647,6 +650,27 @@ app.registerExtension({
                 this.addDOMWidget("vnccs_visual", "customwidget", ui.container);
                 this.setSize([420, 220]);
                 ui.read();
+            }
+
+            return r;
+        };
+    },
+});
+
+app.registerExtension({
+    name: "BatchSaveImages.Extension",
+    async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData.name !== "BatchSaveImages") return;
+
+        const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+        nodeType.prototype.onNodeCreated = function () {
+            const r = origOnNodeCreated?.apply(this, arguments);
+
+            // Hide the paths multiline textbox
+            const pathsWidget = this?.widgets?.find((w) => w.name === "paths");
+            if (pathsWidget) {
+                pathsWidget.type = "hidden";
+                pathsWidget.computeSize = () => [0, -4];
             }
 
             return r;

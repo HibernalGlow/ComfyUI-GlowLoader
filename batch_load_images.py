@@ -9,6 +9,14 @@ from PIL import Image, ImageOps, ImageSequence
 import folder_paths
 import node_helpers
 
+# Register avif and webp support
+try:
+    from pillow_avif import AvifImagePlugin  # noqa: F401
+except ImportError:
+    pass
+
+SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".avif", ".bmp", ".gif", ".tiff", ".tif"}
+
 
 class BatchLoadImages:
     @classmethod
@@ -30,9 +38,10 @@ class BatchLoadImages:
 
     CATEGORY = "ComfyUI-GlowLoader"
 
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("images", "filenames")
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("images", "filenames", "paths")
     FUNCTION = "load_images"
+    OUTPUT_NODE = True
 
     def load_images(self, image_list: str, max_images: int, mode: str, index: int):
         names = [x.strip() for x in (image_list or "").splitlines()]
@@ -53,6 +62,7 @@ class BatchLoadImages:
 
         output_images = []
         output_names = []
+        output_paths = []
 
         excluded_formats = ["MPO"]
 
@@ -93,13 +103,16 @@ class BatchLoadImages:
                 image_tensor = frames[0]
 
             output_images.append(image_tensor)
-            output_names.append(name)
+            # filename only (no directory part)
+            output_names.append(os.path.basename(name))
+            # full annotated path for saving
+            output_paths.append(name)
 
         if len(output_images) == 0:
             raise ValueError("No valid images found")
 
         output_image = torch.cat(output_images, dim=0)
-        return (output_image, "\n".join(output_names))
+        return (output_image, "\n".join(output_names), "\n".join(output_paths))
 
     @classmethod
     def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int):
@@ -260,3 +273,99 @@ class VNCCS_VisualPositionControl(VNCCS_PositionControl):
             data.get("distance", "medium shot"),
             data.get("include_trigger", True),
         )
+
+
+class BatchSaveImages:
+    """Save images preserving the folder structure and original filenames from the loading paths."""
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "paths": ("STRING", {"multiline": True, "default": ""}),
+                "output_dir": ("STRING", {"default": ""}),
+                "format": (["png", "webp", "avif", "jpg"], {"default": "png"}),
+                "quality": ("INT", {"default": 95, "min": 1, "max": 100, "step": 1}),
+            }
+        }
+
+    CATEGORY = "ComfyUI-GlowLoader"
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("saved_paths",)
+    FUNCTION = "save_images"
+    OUTPUT_NODE = True
+
+    def save_images(self, images, paths: str, output_dir: str, format: str, quality: int):
+        path_list = [x.strip() for x in (paths or "").splitlines() if x.strip()]
+
+        if len(path_list) == 0:
+            raise ValueError("paths is empty - connect the 'paths' output from BatchLoadImages")
+
+        # Determine base output directory
+        if output_dir:
+            base_dir = output_dir
+        else:
+            # Default: ComfyUI output directory
+            base_dir = folder_paths.get_output_directory()
+
+        os.makedirs(base_dir, exist_ok=True)
+
+        saved = []
+        batch_size = images.shape[0]
+
+        for i in range(batch_size):
+            img_tensor = images[i]
+            pil_image = self._tensor_to_pil(img_tensor)
+
+            if i < len(path_list):
+                original_path = path_list[i]
+                # Derive subfolder structure from the annotated path
+                # e.g. "subdir/photo.png" -> subdir = "subdir"
+                rel_dir = os.path.dirname(original_path)
+                original_name = os.path.splitext(os.path.basename(original_path))[0]
+            else:
+                rel_dir = ""
+                original_name = f"image_{i:05d}"
+
+            # Build the save directory preserving folder structure
+            if rel_dir:
+                save_dir = os.path.join(base_dir, rel_dir)
+            else:
+                save_dir = base_dir
+            os.makedirs(save_dir, exist_ok=True)
+
+            # Build filename with chosen format
+            ext = f".{format}"
+            filename = original_name + ext
+            full_path = os.path.join(save_dir, filename)
+
+            # Avoid overwriting: append suffix if exists
+            counter = 1
+            while os.path.exists(full_path):
+                filename = f"{original_name}_{counter}{ext}"
+                full_path = os.path.join(save_dir, filename)
+                counter += 1
+
+            # Save with appropriate parameters
+            save_kwargs = {}
+            if format == "jpg":
+                pil_image = pil_image.convert("RGB")
+                save_kwargs["quality"] = quality
+            elif format == "webp":
+                save_kwargs["quality"] = quality
+            elif format == "avif":
+                save_kwargs["quality"] = quality
+            elif format == "png":
+                save_kwargs["compress_level"] = 6
+
+            pil_image.save(full_path, **save_kwargs)
+            saved.append(full_path)
+
+        return ("\n".join(saved),)
+
+    @staticmethod
+    def _tensor_to_pil(tensor):
+        arr = tensor.cpu().numpy()
+        arr = (arr * 255.0).clip(0, 255).astype(np.uint8)
+        return Image.fromarray(arr)

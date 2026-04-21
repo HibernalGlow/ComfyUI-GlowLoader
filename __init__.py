@@ -1,15 +1,17 @@
-from .batch_load_images import BatchLoadImages, VNCCS_PositionControl, VNCCS_VisualPositionControl
+from .batch_load_images import BatchLoadImages, BatchSaveImages, VNCCS_PositionControl, VNCCS_VisualPositionControl
 
 WEB_DIRECTORY = "./web"
 
 NODE_CLASS_MAPPINGS = {
     "BatchLoadImages": BatchLoadImages,
+    "BatchSaveImages": BatchSaveImages,
     "VNCCS_PositionControl": VNCCS_PositionControl,
     "VNCCS_VisualPositionControl": VNCCS_VisualPositionControl,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "BatchLoadImages": "ComfyUI-GlowLoader",
+    "BatchLoadImages": "GlowLoader 加载文件夹图像",
+    "BatchSaveImages": "GlowLoader 保存文件夹图像",
     "VNCCS_PositionControl": "VNCCS Position Control (Prompt)",
     "VNCCS_VisualPositionControl": "VNCCS Visual Position Control (Prompt)",
 }
