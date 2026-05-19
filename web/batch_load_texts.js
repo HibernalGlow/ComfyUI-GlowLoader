@@ -5,6 +5,16 @@ function getTextListWidget(node) {
     return node?.widgets?.find((w) => w.name === "text_list");
 }
 
+function getSourceModeValue(node) {
+    const w = node?.widgets?.find((x) => x.name === "source_mode");
+    return w?.value || "direct";
+}
+
+function getFileModeValue(node) {
+    const w = node?.widgets?.find((x) => x.name === "file_mode");
+    return w?.value || "one_per_file";
+}
+
 function clampInt(v, min, max) {
     v = Math.floor(Number(v));
     if (Number.isNaN(v)) v = min;
@@ -71,18 +81,22 @@ function deepClone(obj) {
 
 // 调用后端生成入队序列
 async function generateQueueSequence(node) {
+    const sourceMode = getSourceModeValue(node);
     const textList = getTextListWidget(node)?.value || "";
+    const fileMode = getFileModeValue(node);
     const maxTexts = getMaxTextsValue(node);
     const queueCount = getQueueCountValue(node);
     const shuffle = getShuffleValue(node);
     const allowDuplicate = getAllowDuplicateValue(node);
     const seed = getSeedValue(node);
 
-    const resp = await api.fetchApi("/glowloader/generate_sequence", {
+    const resp = await api.fetchApi("/glowloader/generate_sequence_texts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+            source_mode: sourceMode,
             text_list: textList,
+            file_mode: fileMode,
             max_texts: maxTexts,
             queue_count: queueCount,
             shuffle: shuffle,
@@ -100,17 +114,13 @@ async function generateQueueSequence(node) {
 }
 
 async function queueAllSequential(node) {
+    const sourceMode = getSourceModeValue(node);
     const texts0 = parseTextList(getTextListWidget(node)?.value);
     if (!texts0 || texts0.length === 0) return;
 
     const maxTexts = getMaxTextsValue(node);
     const texts = maxTexts && maxTexts > 0 ? texts0.slice(0, maxTexts) : texts0;
     if (texts.length === 0) return;
-
-    const queueCount = getQueueCountValue(node);
-    const shuffle = getShuffleValue(node);
-    const allowDuplicate = getAllowDuplicateValue(node);
-    const seed = getSeedValue(node);
 
     // 生成分配序列
     let sequence;
@@ -119,7 +129,21 @@ async function queueAllSequential(node) {
     } catch (e) {
         // 后端API失败，使用前端简单逻辑
         console.warn("Backend sequence generation failed, using frontend fallback:", e);
-        sequence = generateSequenceFallback(texts.length, queueCount, shuffle, allowDuplicate, seed);
+        const fileMode = getFileModeValue(node);
+        const queueCount = getQueueCountValue(node);
+        const shuffle = getShuffleValue(node);
+        const allowDuplicate = getAllowDuplicateValue(node);
+        const seed = getSeedValue(node);
+        
+        // 文件模式下无法准确计算，使用简单循环
+        if (sourceMode === "files") {
+            const count = queueCount > 0 ? queueCount : texts.length;
+            sequence = Array.from({ length: count }, (_, i) => 
+                shuffle ? Math.floor(Math.random() * texts.length) : i % texts.length
+            );
+        } else {
+            sequence = generateSequenceFallback(texts.length, queueCount, shuffle, allowDuplicate, seed);
+        }
     }
 
     if (sequence.length === 0) return;
@@ -217,10 +241,206 @@ function generateSequenceFallback(totalEntries, queueCount, shuffle, allowDuplic
     }
 }
 
+// 上传单个文件
+async function uploadOneFile(file) {
+    const body = new FormData();
+    body.append("image", file, file.name);
+    body.append("type", "input");
+
+    const resp = await api.fetchApi("/upload/image", {
+        method: "POST",
+        body,
+    });
+
+    if (!resp.ok) {
+        throw new Error(await resp.text());
+    }
+
+    const json = await resp.json();
+    return json?.name || file.name;
+}
+
+// 上传文本文件
+async function uploadTextFilesSequential(node, files, { replace = false } = {}) {
+    const w = getTextListWidget(node);
+    if (!w) return [];
+
+    const existing = replace ? [] : parseTextList(w.value);
+    const uploaded = [];
+
+    for (const file of files) {
+        if (!file) continue;
+        const name = (file.name || "").toLowerCase();
+        const extOk = name.endsWith(".txt") || name.endsWith(".md") || name.endsWith(".json") || 
+                      name.endsWith(".csv") || name.endsWith(".yaml") || name.endsWith(".yml") || 
+                      name.endsWith(".log") || name.endsWith(".wild") || name.endsWith(".wildcard");
+        if (!extOk) continue;
+
+        const comfyName = await uploadOneFile(file);
+        if (!comfyName) continue;
+        uploaded.push(comfyName);
+    }
+
+    const merged = existing.concat(uploaded);
+    setTextList(node, merged);
+    return uploaded;
+}
+
+function openMultiSelect(node, { replace = false } = {}) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".txt,.md,.json,.csv,.yaml,.yml,.log,.wild,.wildcard";
+    input.multiple = true;
+    input.style.display = "none";
+    document.body.appendChild(input);
+
+    input.onchange = async (e) => {
+        try {
+            const files = Array.from(e.target.files || []);
+            await uploadTextFilesSequential(node, files, { replace });
+        } finally {
+            document.body.removeChild(input);
+        }
+    };
+
+    input.click();
+}
+
+function openFolderSelect(node, { replace = false } = {}) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".txt,.md,.json,.csv,.yaml,.yml,.log,.wild,.wildcard";
+    input.multiple = true;
+    input.webkitdirectory = true;
+    input.directory = true;
+    input.style.display = "none";
+    document.body.appendChild(input);
+
+    input.onchange = async (e) => {
+        try {
+            let files = Array.from(e.target.files || []);
+            const allowExt = new Set([".txt", ".md", ".json", ".csv", ".yaml", ".yml", ".log", ".wild", ".wildcard"]);
+            files = files.filter((f) => {
+                const name = (f?.name || "").toLowerCase();
+                for (const ext of allowExt) {
+                    if (name.endsWith(ext)) return true;
+                }
+                return false;
+            });
+            files.sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
+            await uploadTextFilesSequential(node, files, { replace });
+        } finally {
+            document.body.removeChild(input);
+        }
+    };
+
+    input.click();
+}
+
+function isFilesDragEvent(e) {
+    const dt = e?.dataTransfer;
+    if (!dt) return false;
+    if (dt.files && dt.files.length > 0) return true;
+    return Array.from(dt.types || []).includes("Files");
+}
+
 function createTextListUI(node) {
     const container = document.createElement("div");
     container.style.cssText =
         "width:100%;padding:8px;background:var(--comfy-menu-bg);border:1px solid var(--border-color);border-radius:6px;margin:5px 0;pointer-events:auto;";
+
+    // 源模式选择
+    const sourceModeRow = document.createElement("div");
+    sourceModeRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;align-items:center;";
+    
+    const sourceModeLabel = document.createElement("span");
+    sourceModeLabel.textContent = "数据源:";
+    sourceModeLabel.style.cssText = "font-size:12px;opacity:0.8;";
+    
+    const sourceModeSelect = document.createElement("select");
+    sourceModeSelect.style.cssText = "flex:1;padding:4px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;font-size:12px;";
+    
+    const directOption = document.createElement("option");
+    directOption.value = "direct";
+    directOption.textContent = "直接输入";
+    
+    const filesOption = document.createElement("option");
+    filesOption.value = "files";
+    filesOption.textContent = "从文件加载";
+    
+    sourceModeSelect.appendChild(directOption);
+    sourceModeSelect.appendChild(filesOption);
+    sourceModeSelect.value = getSourceModeValue(node);
+    
+    sourceModeSelect.onchange = (e) => {
+        const w = getWidgetByName(node, "source_mode");
+        if (w) {
+            w.value = e.target.value;
+            w.callback?.(w.value);
+        }
+        updateUIForSourceMode();
+    };
+    
+    sourceModeRow.appendChild(sourceModeLabel);
+    sourceModeRow.appendChild(sourceModeSelect);
+
+    // 文件模式选择（仅在文件模式下显示）
+    const fileModeRow = document.createElement("div");
+    fileModeRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;align-items:center;";
+    
+    const fileModeLabel = document.createElement("span");
+    fileModeLabel.textContent = "文件解析:";
+    fileModeLabel.style.cssText = "font-size:12px;opacity:0.8;";
+    
+    const fileModeSelect = document.createElement("select");
+    fileModeSelect.style.cssText = "flex:1;padding:4px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;font-size:12px;";
+    
+    const onePerFileOption = document.createElement("option");
+    onePerFileOption.value = "one_per_file";
+    onePerFileOption.textContent = "整个文件作为一个条目";
+    
+    const linesPerFileOption = document.createElement("option");
+    linesPerFileOption.value = "lines_per_file";
+    linesPerFileOption.textContent = "文件每行作为一个条目";
+    
+    fileModeSelect.appendChild(onePerFileOption);
+    fileModeSelect.appendChild(linesPerFileOption);
+    fileModeSelect.value = getFileModeValue(node);
+    
+    fileModeSelect.onchange = (e) => {
+        const w = getWidgetByName(node, "file_mode");
+        if (w) {
+            w.value = e.target.value;
+            w.callback?.(w.value);
+        }
+    };
+    
+    fileModeRow.appendChild(fileModeLabel);
+    fileModeRow.appendChild(fileModeSelect);
+
+    // 文件操作按钮（仅在文件模式下显示）
+    const fileBtnRow = document.createElement("div");
+    fileBtnRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;";
+    
+    const mkBtn = (label) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.style.cssText =
+            "flex:1;padding:8px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;cursor:pointer;font-size:13px;min-width:70px;";
+        return b;
+    };
+    
+    const selectFilesBtn = mkBtn("选择文件");
+    const selectFolderBtn = mkBtn("选择文件夹");
+    const addFilesBtn = mkBtn("追加文件");
+    
+    selectFilesBtn.onclick = () => openMultiSelect(node, { replace: true });
+    selectFolderBtn.onclick = () => openFolderSelect(node, { replace: true });
+    addFilesBtn.onclick = () => openMultiSelect(node, { replace: false });
+    
+    fileBtnRow.appendChild(selectFilesBtn);
+    fileBtnRow.appendChild(selectFolderBtn);
+    fileBtnRow.appendChild(addFilesBtn);
 
     // 设置区域
     const settingsRow = document.createElement("div");
@@ -295,33 +515,74 @@ function createTextListUI(node) {
     });
     settingsRow.appendChild(seedInput);
 
-    // 按钮区域
-    const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;";
-
-    const mkBtn = (label) => {
-        const b = document.createElement("button");
-        b.textContent = label;
-        b.style.cssText =
-            "flex:1;padding:8px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;cursor:pointer;font-size:13px;min-width:70px;";
-        return b;
-    };
-
+    // 直接输入模式按钮
+    const directBtnRow = document.createElement("div");
+    directBtnRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;";
+    
     const addBtn = mkBtn("添加行");
     const insertBtn = mkBtn("插入行");
+    const clearBtn2 = mkBtn("清空");
+    
+    addBtn.onclick = () => {
+        const texts = parseTextList(getTextListWidget(node)?.value);
+        texts.push("");
+        setTextList(node, texts);
+        redraw();
+    };
+    
+    insertBtn.onclick = () => {
+        const texts = parseTextList(getTextListWidget(node)?.value);
+        const insertIdx = selectedIndex >= 0 ? selectedIndex : texts.length;
+        texts.splice(insertIdx, 0, "");
+        setTextList(node, texts);
+        selectedIndex = insertIdx;
+        redraw();
+    };
+    
+    clearBtn2.onclick = () => {
+        if (confirm("确定要清空所有文本吗?")) {
+            setTextList(node, []);
+            selectedIndex = -1;
+            redraw();
+        }
+    };
+    
+    directBtnRow.appendChild(addBtn);
+    directBtnRow.appendChild(insertBtn);
+    directBtnRow.appendChild(clearBtn2);
+
+    // 队列操作按钮
+    const queueBtnRow = document.createElement("div");
+    queueBtnRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;";
+    
     const queueBtn = mkBtn("逐行入队");
     const queueOneBtn = mkBtn("入队当前");
-
-    const clearBtn = document.createElement("button");
-    clearBtn.textContent = "清空";
-    clearBtn.style.cssText =
-        "padding:8px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;cursor:pointer;font-size:13px;";
-
-    btnRow.appendChild(addBtn);
-    btnRow.appendChild(insertBtn);
-    btnRow.appendChild(queueBtn);
-    btnRow.appendChild(queueOneBtn);
-    btnRow.appendChild(clearBtn);
+    const clearBtn = mkBtn("清空");
+    
+    queueBtn.onclick = async () => {
+        await queueAllSequential(node);
+    };
+    
+    queueOneBtn.onclick = async () => {
+        const wMode = getWidgetByName(node, "mode");
+        if (wMode) {
+            wMode.value = "single";
+            wMode.callback?.(wMode.value);
+        }
+        await queueCurrent(node);
+    };
+    
+    clearBtn.onclick = () => {
+        if (confirm("确定要清空所有文本吗?")) {
+            setTextList(node, []);
+            selectedIndex = -1;
+            redraw();
+        }
+    };
+    
+    queueBtnRow.appendChild(queueBtn);
+    queueBtnRow.appendChild(queueOneBtn);
+    queueBtnRow.appendChild(clearBtn);
 
     const info = document.createElement("div");
     info.style.cssText = "font-size:12px;opacity:0.85;margin-bottom:6px;";
@@ -337,13 +598,14 @@ function createTextListUI(node) {
         const queueCount = getQueueCountValue(node);
         const shuffle = getShuffleValue(node);
         const allowDup = getAllowDuplicateValue(node);
+        const sourceMode = getSourceModeValue(node);
         
-        let modeText = "";
+        let modeText = sourceMode === "files" ? "[文件模式]" : "[直接输入]";
         if (shuffle) modeText += "[乱序]";
         if (!allowDup) modeText += "[不重复]";
         if (queueCount > 0) modeText += `[跑${queueCount}次]`;
         
-        info.textContent = `共 ${texts.length} 行 ${modeText} (当前选中: ${selectedIndex >= 0 ? selectedIndex + 1 : "无"})`;
+        info.textContent = `共 ${texts.length} 行 ${modeText}`;
     };
 
     const redraw = () => {
@@ -352,7 +614,10 @@ function createTextListUI(node) {
 
         if (texts.length === 0) {
             const emptyMsg = document.createElement("div");
-            emptyMsg.textContent = "点击「添加行」输入文本";
+            const sourceMode = getSourceModeValue(node);
+            emptyMsg.textContent = sourceMode === "files" 
+                ? "点击「选择文件」或「选择文件夹」加载文本文件" 
+                : "点击「添加行」输入文本";
             emptyMsg.style.cssText = "text-align:center;padding:20px;opacity:0.6;font-size:12px;";
             listContainer.appendChild(emptyMsg);
             selectedIndex = -1;
@@ -419,76 +684,69 @@ function createTextListUI(node) {
         app.graph.setDirtyCanvas(true);
     };
 
-    addBtn.onclick = () => {
-        const texts = parseTextList(getTextListWidget(node)?.value);
-        texts.push("");
-        setTextList(node, texts);
-        selectedIndex = texts.length - 1;
+    // 根据源模式更新 UI
+    const updateUIForSourceMode = () => {
+        const sourceMode = getSourceModeValue(node);
+        if (sourceMode === "files") {
+            fileModeRow.style.display = "flex";
+            fileBtnRow.style.display = "flex";
+            directBtnRow.style.display = "none";
+        } else {
+            fileModeRow.style.display = "none";
+            fileBtnRow.style.display = "none";
+            directBtnRow.style.display = "flex";
+        }
         redraw();
-        setTimeout(() => {
-            editSelectedRow();
-        }, 50);
     };
 
-    insertBtn.onclick = () => {
-        const texts = parseTextList(getTextListWidget(node)?.value);
-        const insertIdx = selectedIndex >= 0 ? selectedIndex : texts.length;
-        texts.splice(insertIdx, 0, "");
-        setTextList(node, texts);
-        selectedIndex = insertIdx;
-        redraw();
-        setTimeout(() => {
-            editSelectedRow();
-        }, 50);
-    };
-
-    const editSelectedRow = () => {
-        if (selectedIndex < 0) return;
-        const texts = parseTextList(getTextListWidget(node)?.value);
-        if (selectedIndex >= texts.length) return;
-
-        const currentText = texts[selectedIndex];
-        const newText = prompt("编辑文本:", currentText);
-        if (newText !== null) {
-            texts[selectedIndex] = newText.trim();
-            setTextList(node, texts);
-            redraw();
-        }
-    };
-
-    queueBtn.onclick = async () => {
-        await queueAllSequential(node);
-    };
-
-    queueOneBtn.onclick = async () => {
-        const wMode = getWidgetByName(node, "mode");
-        if (wMode) {
-            wMode.value = "single";
-            wMode.callback?.(wMode.value);
-        }
-        await queueCurrent(node);
-    };
-
-    clearBtn.onclick = () => {
-        if (confirm("确定要清空所有文本吗?")) {
-            setTextList(node, []);
-            selectedIndex = -1;
-            redraw();
-        }
-    };
-
-    // Double click to edit
-    listContainer.addEventListener("dblclick", (e) => {
-        const item = e.target.closest("div[onclick]");
-        if (item) {
-            editSelectedRow();
-        }
+    // 拖拽支持
+    container.addEventListener("dragover", (e) => {
+        if (!isFilesDragEvent(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        container.style.border = "2px dashed #4a6";
     });
 
+    container.addEventListener("dragleave", (e) => {
+        if (!isFilesDragEvent(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        container.style.border = "1px solid var(--border-color)";
+    });
+
+    container.addEventListener("drop", async (e) => {
+        if (!isFilesDragEvent(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        container.style.border = "1px solid var(--border-color)";
+        
+        const files = Array.from(e.dataTransfer?.files || []);
+        if (files.length === 0) return;
+        
+        // 切换到文件模式
+        const w = getWidgetByName(node, "source_mode");
+        if (w) {
+            w.value = "files";
+            w.callback?.(w.value);
+            sourceModeSelect.value = "files";
+            updateUIForSourceMode();
+        }
+        
+        await uploadTextFilesSequential(node, files, { replace: false });
+        redraw();
+    });
+
+    container.appendChild(sourceModeRow);
+    container.appendChild(fileModeRow);
+    container.appendChild(fileBtnRow);
     container.appendChild(settingsRow);
-    container.appendChild(btnRow);
+    container.appendChild(directBtnRow);
+    container.appendChild(queueBtnRow);
     container.appendChild(info);
     container.appendChild(listContainer);
+
+    // 初始化 UI 状态
+    updateUIForSourceMode();
 
     return { container, redraw };
 }
@@ -508,9 +766,9 @@ app.registerExtension({
                 textListWidget.computeSize = () => [0, -4];
             }
 
-            // 隐藏可选参数 widget，通过 UI 控制
-            const optionalWidgets = ["queue_count", "shuffle", "allow_duplicate", "seed"];
-            for (const name of optionalWidgets) {
+            // 隐藏所有 widget，通过 UI 控制
+            const hiddenWidgets = ["source_mode", "file_mode", "max_texts", "queue_count", "shuffle", "allow_duplicate", "seed"];
+            for (const name of hiddenWidgets) {
                 const w = getWidgetByName(this, name);
                 if (w) {
                     w.type = "hidden";
@@ -522,7 +780,7 @@ app.registerExtension({
             const ui = createTextListUI(this);
             this._batchLoadTextsUI = ui;
             this.addDOMWidget("batch_load_texts", "customwidget", ui.container);
-            this.setSize([480, 480]);
+            this.setSize([500, 520]);
 
             // Keep the DOM list in sync if something else changes the widget.
             if (textListWidget) {
