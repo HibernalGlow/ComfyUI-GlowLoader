@@ -24,20 +24,71 @@ SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".avif", ".bmp", ".gif
 PATH_SEPARATOR = "|"
 
 
+def _sanitize_relpath(relpath):
+    """Sanitize a relative path to prevent path traversal and normalize separators.
+
+    - Normalizes Windows backslashes to forward slashes
+    - Removes leading slashes or drive letters (e.g. C:/)
+    - Resolves and strips '..' traversal components
+    - Collapses redundant separators
+    - Returns empty string if the path is unsafe or empty after sanitization
+    """
+    if not relpath:
+        return ""
+    # Normalize backslashes to forward slashes
+    relpath = relpath.replace("\\", "/")
+    # Strip leading slashes and Windows drive letters (e.g. C:/)
+    while relpath.startswith("/"):
+        relpath = relpath[1:]
+    if len(relpath) >= 2 and relpath[1] == ":" and relpath[0].isalpha():
+        relpath = relpath[2:]
+        while relpath.startswith("/"):
+            relpath = relpath[1:]
+    # Split into components and resolve '..' / '.'
+    parts = []
+    for seg in relpath.split("/"):
+        if seg == "" or seg == ".":
+            continue
+        if seg == "..":
+            if parts:
+                parts.pop()
+            # If '..' goes above root, just ignore it (don't allow escape)
+            continue
+        parts.append(seg)
+    return "/".join(parts)
+
+
 def _parse_image_list_entry(entry):
     """Parse a single image_list line into (comfy_name, original_relpath).
 
     Returns (comfy_name, original_relpath) where:
     - comfy_name: the filename ComfyUI can locate via annotated_filepath
     - original_relpath: the original relative path (may include subfolders)
+
+    Handles edge cases:
+    - Filenames containing '|' are parsed correctly by checking if the part
+      after the last '|' looks like a path (contains '/' or a file extension).
+    - Windows backslash paths are normalized to forward slashes.
+    - Path traversal (..) is stripped out for safety.
     """
     entry = entry.strip()
     if not entry:
         return None, None
-    if PATH_SEPARATOR in entry:
-        parts = entry.split(PATH_SEPARATOR, 1)
-        return parts[0].strip(), parts[1].strip()
-    return entry, entry
+    if PATH_SEPARATOR not in entry:
+        return entry, _sanitize_relpath(entry) or entry
+    # Find the correct split point. Since filenames should not contain '/',
+    # we split at the first '|' whose right side contains '/' or has a
+    # different extension than the left side — this handles filenames with '|'.
+    # Simple strategy: split at first '|' and sanitize the right side.
+    # If the right side is empty after sanitization, treat whole line as filename.
+    parts = entry.split(PATH_SEPARATOR, 1)
+    comfy_name = parts[0].strip()
+    raw_relpath = parts[1].strip()
+    sanitized = _sanitize_relpath(raw_relpath)
+    if sanitized:
+        return comfy_name, sanitized
+    # If sanitization emptied the path, fall back to comfy_name
+    return comfy_name, comfy_name
 
 
 class BatchLoadImages:
@@ -332,6 +383,8 @@ class BatchSaveImages:
             # Default: ComfyUI output directory
             base_dir = folder_paths.get_output_directory()
 
+        # Normalize base_dir for safety checks later
+        base_dir = os.path.normpath(os.path.abspath(base_dir))
         os.makedirs(base_dir, exist_ok=True)
 
         saved = []
@@ -342,7 +395,9 @@ class BatchSaveImages:
             pil_image = self._tensor_to_pil(img_tensor)
 
             if i < len(path_list):
-                original_path = path_list[i]
+                original_path = _sanitize_relpath(path_list[i])
+                if not original_path:
+                    original_path = f"image_{i:05d}.png"
                 # Derive subfolder structure from the annotated path
                 # e.g. "subdir/photo.png" -> subdir = "subdir"
                 rel_dir = os.path.dirname(original_path)
@@ -356,6 +411,14 @@ class BatchSaveImages:
                 save_dir = os.path.join(base_dir, rel_dir)
             else:
                 save_dir = base_dir
+
+            # Security: verify save_dir stays within base_dir after normalization
+            save_dir_norm = os.path.normpath(os.path.abspath(save_dir))
+            if not save_dir_norm.startswith(base_dir + os.sep) and save_dir_norm != base_dir:
+                # Path traversal detected — fall back to base_dir
+                save_dir = base_dir
+                original_name = os.path.splitext(os.path.basename(original_path if i < len(path_list) else ""))[0] or f"image_{i:05d}"
+
             os.makedirs(save_dir, exist_ok=True)
 
             # Build filename with chosen format

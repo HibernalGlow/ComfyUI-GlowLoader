@@ -86,6 +86,104 @@ class TestParseImageListEntry:
         assert c == "photo.png"
         assert p == "sub/dir/photo.png"
 
+    def test_windows_backslash_path(self):
+        from batch_load_images import _parse_image_list_entry
+        c, p = _parse_image_list_entry("photo.png|sub\\deep\\photo.png")
+        assert c == "photo.png"
+        assert p == "sub/deep/photo.png"
+
+    def test_leading_slash_stripped(self):
+        from batch_load_images import _parse_image_list_entry
+        c, p = _parse_image_list_entry("photo.png|/sub/deep/photo.png")
+        assert c == "photo.png"
+        assert p == "sub/deep/photo.png"
+
+    def test_windows_drive_letter_stripped(self):
+        from batch_load_images import _parse_image_list_entry
+        c, p = _parse_image_list_entry("photo.png|C:/sub/deep/photo.png")
+        assert c == "photo.png"
+        assert p == "sub/deep/photo.png"
+
+    def test_path_traversal_removed(self):
+        from batch_load_images import _parse_image_list_entry
+        c, p = _parse_image_list_entry("photo.png|../../../etc/passwd")
+        assert c == "photo.png"
+        assert p == "etc/passwd"
+
+    def test_path_traversal_in_middle(self):
+        from batch_load_images import _parse_image_list_entry
+        c, p = _parse_image_list_entry("photo.png|sub/../../etc/photo.png")
+        assert c == "photo.png"
+        assert p == "etc/photo.png"
+
+    def test_dot_components_removed(self):
+        from batch_load_images import _parse_image_list_entry
+        c, p = _parse_image_list_entry("photo.png|./sub/./deep/./photo.png")
+        assert c == "photo.png"
+        assert p == "sub/deep/photo.png"
+
+    def test_unicode_filename(self):
+        from batch_load_images import _parse_image_list_entry
+        c, p = _parse_image_list_entry("photo.png|图片/风景/photo.png")
+        assert c == "photo.png"
+        assert p == "图片/风景/photo.png"
+
+    def test_spaces_in_path(self):
+        from batch_load_images import _parse_image_list_entry
+        c, p = _parse_image_list_entry("photo.png|My Photos/Summer Trip/photo.png")
+        assert c == "photo.png"
+        assert p == "My Photos/Summer Trip/photo.png"
+
+    def test_double_slash_collapsed(self):
+        from batch_load_images import _parse_image_list_entry
+        c, p = _parse_image_list_entry("photo.png|sub//deep///photo.png")
+        assert c == "photo.png"
+        assert p == "sub/deep/photo.png"
+
+
+class TestSanitizeRelpath:
+    def test_basic(self):
+        from batch_load_images import _sanitize_relpath
+        assert _sanitize_relpath("sub/deep/photo.png") == "sub/deep/photo.png"
+
+    def test_backslash(self):
+        from batch_load_images import _sanitize_relpath
+        assert _sanitize_relpath("sub\\deep\\photo.png") == "sub/deep/photo.png"
+
+    def test_leading_slash(self):
+        from batch_load_images import _sanitize_relpath
+        assert _sanitize_relpath("/sub/deep/photo.png") == "sub/deep/photo.png"
+
+    def test_multiple_leading_slashes(self):
+        from batch_load_images import _sanitize_relpath
+        assert _sanitize_relpath("///sub/photo.png") == "sub/photo.png"
+
+    def test_drive_letter(self):
+        from batch_load_images import _sanitize_relpath
+        assert _sanitize_relpath("C:/sub/photo.png") == "sub/photo.png"
+        assert _sanitize_relpath("D:\\sub\\photo.png") == "sub/photo.png"
+
+    def test_traversal_above_root(self):
+        from batch_load_images import _sanitize_relpath
+        # All .. should be consumed without going above root
+        assert _sanitize_relpath("../../../etc/passwd") == "etc/passwd"
+
+    def test_traversal_partial(self):
+        from batch_load_images import _sanitize_relpath
+        assert _sanitize_relpath("a/b/../../c/photo.png") == "c/photo.png"
+
+    def test_empty(self):
+        from batch_load_images import _sanitize_relpath
+        assert _sanitize_relpath("") == ""
+
+    def test_only_dots(self):
+        from batch_load_images import _sanitize_relpath
+        assert _sanitize_relpath("../../..") == ""
+
+    def test_mixed_backslash_and_traversal(self):
+        from batch_load_images import _sanitize_relpath
+        assert _sanitize_relpath("..\\..\\sub\\photo.png") == "sub/photo.png"
+
 
 # ---------------------------------------------------------------------------
 # BatchLoadImages tests
@@ -288,6 +386,67 @@ class TestBatchSaveImages:
         images = self._make_test_tensors(1)
         with pytest.raises(ValueError, match="paths is empty"):
             node.save_images(images, "", str(tmp_path / "output"), "png", 95)
+
+    def test_save_path_traversal_blocked(self, tmp_path):
+        """Ensure .. in paths cannot escape the output directory."""
+        node = self._make_node()
+        images = self._make_test_tensors(1)
+        output_dir = str(tmp_path / "output")
+
+        # Try to write to ../../../escape.png — should be sanitized
+        node.save_images(images, "../../../escape.png", output_dir, "png", 95)
+
+        # File should be inside output_dir, not above it
+        assert not os.path.exists(os.path.join(str(tmp_path), "escape.png"))
+        # Should be saved as escape.png inside output_dir (.. stripped)
+        assert os.path.isfile(os.path.join(output_dir, "escape.png"))
+
+    def test_save_absolute_path_blocked(self, tmp_path):
+        """Ensure absolute paths are treated as relative within output_dir."""
+        node = self._make_node()
+        images = self._make_test_tensors(1)
+        output_dir = str(tmp_path / "output")
+
+        # Absolute path should be sanitized
+        node.save_images(images, "/etc/passwd.png", output_dir, "png", 95)
+        assert os.path.isfile(os.path.join(output_dir, "etc", "passwd.png"))
+
+    def test_save_windows_drive_path_blocked(self, tmp_path):
+        """Windows-style drive letter paths should be sanitized."""
+        node = self._make_node()
+        images = self._make_test_tensors(1)
+        output_dir = str(tmp_path / "output")
+
+        node.save_images(images, "C:/Windows/System32/evil.png", output_dir, "png", 95)
+        assert os.path.isfile(os.path.join(output_dir, "Windows", "System32", "evil.png"))
+
+    def test_save_backslash_path_normalized(self, tmp_path):
+        """Backslash paths should be normalized to forward slashes."""
+        node = self._make_node()
+        images = self._make_test_tensors(1)
+        output_dir = str(tmp_path / "output")
+
+        node.save_images(images, "sub\\deep\\photo.png", output_dir, "png", 95)
+        assert os.path.isfile(os.path.join(output_dir, "sub", "deep", "photo.png"))
+
+    def test_save_unicode_path(self, tmp_path):
+        """Unicode paths (Chinese, emoji, etc.) should work."""
+        node = self._make_node()
+        images = self._make_test_tensors(2)
+        output_dir = str(tmp_path / "output")
+
+        node.save_images(images, "图片/风景/photo.png\n folder🐱/emoji/img.png", output_dir, "png", 95)
+        assert os.path.isfile(os.path.join(output_dir, "图片", "风景", "photo.png"))
+        assert os.path.isfile(os.path.join(output_dir, " folder🐱", "emoji", "img.png"))
+
+    def test_save_spaces_in_path(self, tmp_path):
+        """Paths with spaces should be preserved."""
+        node = self._make_node()
+        images = self._make_test_tensors(1)
+        output_dir = str(tmp_path / "output")
+
+        node.save_images(images, "My Photos/Summer Trip/photo.png", output_dir, "png", 95)
+        assert os.path.isfile(os.path.join(output_dir, "My Photos", "Summer Trip", "photo.png"))
 
 
 # ---------------------------------------------------------------------------

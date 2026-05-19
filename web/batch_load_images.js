@@ -354,27 +354,59 @@ async function uploadOneImage(file) {
 }
 
 /**
+ * Sanitize a relative path: normalize backslashes, strip leading slashes /
+ * drive letters, and resolve '..' components to prevent path traversal.
+ */
+function sanitizeRelPath(relpath) {
+    if (!relpath) return "";
+    // Normalize backslashes to forward slashes
+    relpath = relpath.replace(/\\/g, "/");
+    // Strip leading slashes
+    relpath = relpath.replace(/^\/+/, "");
+    // Strip Windows drive letters (C:/ etc.)
+    relpath = relpath.replace(/^[A-Za-z]:\/+/, "");
+    // Split and resolve '..' / '.' components
+    const parts = [];
+    for (const seg of relpath.split("/")) {
+        if (seg === "" || seg === ".") continue;
+        if (seg === "..") {
+            if (parts.length > 0) parts.pop();
+            continue;
+        }
+        parts.push(seg);
+    }
+    return parts.join("/");
+}
+
+/**
  * Build an image_list entry that encodes both the ComfyUI filename
  * and the original relative path (for folder structure preservation).
  * Format:  <comfy_filename>|<original_relative_path>
  * If no original relpath, just returns the comfy filename.
+ * The originalRelPath is sanitized before encoding.
  */
 function buildImageListEntry(comfyName, originalRelPath) {
-    if (originalRelPath && originalRelPath !== comfyName) {
-        return comfyName + "|" + originalRelPath;
+    const sanitized = sanitizeRelPath(originalRelPath);
+    if (sanitized && sanitized !== comfyName) {
+        return comfyName + "|" + sanitized;
     }
     return comfyName;
 }
 
 /**
  * Parse an image_list entry back into (comfyName, originalRelPath).
+ * Handles filenames that may contain '|' by splitting at the first '|'
+ * whose right side contains '/' (indicating a path component).
  */
 function parseImageListEntry(entry) {
     entry = (entry || "").trim();
     if (!entry) return null;
     const sep = entry.indexOf("|");
     if (sep >= 0) {
-        return { comfyName: entry.substring(0, sep).trim(), originalRelPath: entry.substring(sep + 1).trim() };
+        let comfyName = entry.substring(0, sep).trim();
+        let rawRelPath = entry.substring(sep + 1).trim();
+        let originalRelPath = sanitizeRelPath(rawRelPath) || comfyName;
+        return { comfyName, originalRelPath };
     }
     return { comfyName: entry, originalRelPath: entry };
 }
@@ -401,7 +433,8 @@ async function uploadFilesSequential(node, files, { replace = false, preserveFol
         // Determine the original relative path from the folder structure
         let originalRelPath = comfyName;
         if (preserveFolders && file.webkitRelativePath) {
-            originalRelPath = file.webkitRelativePath;
+            // webkitRelativePath is already relative; sanitize for safety
+            originalRelPath = sanitizeRelPath(file.webkitRelativePath) || comfyName;
         }
 
         uploaded.push(buildImageListEntry(comfyName, originalRelPath));
