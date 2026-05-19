@@ -69,24 +69,24 @@ class BatchLoadTexts:
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
             },
             "optional": {
+                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "control_after_generate": True, "forceInput": True}),
                 "queue_count": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "shuffle": ("BOOLEAN", {"default": False}),
                 "allow_duplicate": ("BOOLEAN", {"default": True}),
-                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "control_after_generate": True}),
             }
         }
 
     CATEGORY = "ComfyUI-GlowLoader"
 
-    RETURN_TYPES = ("STRING", "STRING", "INT")
-    RETURN_NAMES = ("text", "all_texts", "current_index")
+    RETURN_TYPES = ("STRING", "STRING", "INT", "INT")
+    RETURN_NAMES = ("text", "all_texts", "current_index", "seed_out")
     FUNCTION = "load_texts"
     OUTPUT_NODE = True
 
     def load_texts(self, source_mode: str, text_list: str, file_mode: str,
                    max_texts: int, mode: str, index: int,
-                   queue_count: int = 0, shuffle: bool = False,
-                   allow_duplicate: bool = True, seed: int = -1):
+                   seed: int = -1, queue_count: int = 0,
+                   shuffle: bool = False, allow_duplicate: bool = True):
 
         # 根据 source_mode 获取 entries
         if source_mode == "direct":
@@ -104,18 +104,21 @@ class BatchLoadTexts:
 
         total = len(entries)
 
+        # 确定实际使用的种子：seed==-1 时生成随机种子
+        effective_seed = seed if seed >= 0 else random.randint(0, 2147483647)
+
         if mode == "single":
             # 根据 shuffle/seed/allow_duplicate 计算实际输出索引
             effective_index = self._resolve_index(
-                total, index, shuffle, allow_duplicate, seed
+                total, index, shuffle, allow_duplicate, effective_seed
             )
-            return (entries[effective_index], "\n".join(entries), effective_index)
+            return (entries[effective_index], "\n".join(entries), effective_index, effective_seed)
 
         # batch mode: 同样支持 shuffle，返回按规则计算的第一个
         effective_index = self._resolve_index(
-            total, 0, shuffle, allow_duplicate, seed
+            total, 0, shuffle, allow_duplicate, effective_seed
         )
-        return (entries[effective_index], "\n".join(entries), effective_index)
+        return (entries[effective_index], "\n".join(entries), effective_index, effective_seed)
 
     @staticmethod
     def _resolve_index(total: int, index: int, shuffle: bool,
@@ -182,8 +185,8 @@ class BatchLoadTexts:
     @classmethod
     def IS_CHANGED(s, source_mode: str, text_list: str, file_mode: str,
                    max_texts: int, mode: str, index: int,
-                   queue_count: int = 0, shuffle: bool = False, 
-                   allow_duplicate: bool = True, seed: int = -1):
+                   seed: int = -1, queue_count: int = 0,
+                   shuffle: bool = False, allow_duplicate: bool = True):
         m = hashlib.sha256()
         
         # 计算 entries 用于 hash
@@ -226,13 +229,14 @@ class BatchLoadTexts:
         m.update(str(seed).encode("utf-8"))
         for entry in entries:
             m.update(entry.encode("utf-8") if isinstance(entry, str) else entry)
+
         return m.digest().hex()
 
     @classmethod
     def VALIDATE_INPUTS(s, source_mode: str, text_list: str, file_mode: str,
                         max_texts: int, mode: str, index: int,
-                        queue_count: int = 0, shuffle: bool = False, 
-                        allow_duplicate: bool = True, seed: int = -1):
+                        seed: int = -1, queue_count: int = 0,
+                        shuffle: bool = False, allow_duplicate: bool = True):
         
         # 检查是否有内容
         if source_mode == "direct":
@@ -276,36 +280,34 @@ class BatchLoadTexts:
 
     @classmethod
     def generate_queue_sequence(cls, source_mode: str, text_list: str, file_mode: str,
-                                max_texts: int, queue_count: int, shuffle: bool, 
+                                max_texts: int, queue_count: int, shuffle: bool,
                                 allow_duplicate: bool, seed: int):
         """生成入队序列，返回索引列表"""
-        
+
         # 计算 entries 数量
         if source_mode == "direct":
             entries = [x.strip() for x in (text_list or "").splitlines() if x.strip()]
         else:
             # 文件模式需要实际加载
             entries = cls._load_entries_for_sequence(text_list, file_mode)
-        
+
         if len(entries) == 0:
             return []
-        
+
         if max_texts and max_texts > 0:
             entries = entries[:max_texts]
-        
+
         total_entries = len(entries)
-        
+
         # 确定实际入队次数
         count = queue_count if queue_count > 0 else total_entries
-        
-        # 设置随机种子
-        if seed >= 0:
-            rng = random.Random(seed)
-        else:
-            rng = random.Random()
-        
+
+        # 确定实际使用的种子
+        effective_seed = seed if seed >= 0 else random.randint(0, 2147483647)
+        rng = random.Random(effective_seed)
+
         indices = list(range(total_entries))
-        
+
         if shuffle:
             # 乱序模式
             if allow_duplicate:

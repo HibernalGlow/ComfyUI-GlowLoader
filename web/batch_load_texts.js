@@ -113,6 +113,105 @@ async function generateQueueSequence(node) {
     return json.sequence || [];
 }
 
+// 获取节点在直接模式下的条目数（近似）
+function getNodeEntryCount(node) {
+    const sourceMode = getSourceModeValue(node);
+    const textList = getTextListWidget(node)?.value || "";
+    if (sourceMode === "direct") {
+        return parseTextList(textList).length;
+    }
+    // 文件模式：返回文件数量作为近似条目数
+    return parseTextList(textList).length;
+}
+
+// 获取节点在 single 模式下的 index widget
+function getNodeIndexWidget(node) {
+    return getWidgetByName(node, "index");
+}
+
+// 获取节点在 single 模式下的 mode widget
+function getNodeModeWidget(node) {
+    return getWidgetByName(node, "mode");
+}
+
+// 为单个节点生成分配序列（复用后端 API 或前端 fallback）
+async function generateSequenceForNode(targetNode, stepCount) {
+    const sourceMode = getSourceModeValue(targetNode);
+    const textList = getTextListWidget(targetNode)?.value || "";
+    const fileMode = getFileModeValue(targetNode);
+    const maxTexts = getMaxTextsValue(targetNode);
+    const shuffle = getShuffleValue(targetNode);
+    const allowDuplicate = getAllowDuplicateValue(targetNode);
+    const seed = getSeedValue(targetNode);
+
+    // 先尝试后端 API
+    try {
+        const resp = await api.fetchApi("/glowloader/generate_sequence_texts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                source_mode: sourceMode,
+                text_list: textList,
+                file_mode: fileMode,
+                max_texts: maxTexts,
+                queue_count: stepCount,
+                shuffle: shuffle,
+                allow_duplicate: allowDuplicate,
+                seed: seed,
+            }),
+        });
+        if (resp.ok) {
+            const json = await resp.json();
+            if (json.sequence && json.sequence.length > 0) {
+                return json.sequence;
+            }
+        }
+    } catch (e) {
+        // ignore, fallback below
+    }
+
+    // 前端 fallback
+    const texts0 = parseTextList(textList);
+    if (!texts0 || texts0.length === 0) return [];
+    const texts = maxTexts && maxTexts > 0 ? texts0.slice(0, maxTexts) : texts0;
+    const total = texts.length;
+    if (total === 0) return [];
+
+    if (sourceMode === "files") {
+        return Array.from({ length: stepCount }, (_, i) =>
+            shuffle ? Math.floor(Math.random() * total) : i % total
+        );
+    }
+    return generateSequenceFallback(total, stepCount, shuffle, allowDuplicate, seed);
+}
+
+// 收集工作流中所有需要同步的 BatchLoadTexts 节点信息
+async function collectSyncNodeStates(excludeNode, stepCount) {
+    const allNodes = app.graph.nodes.filter(
+        (n) => n.type === "BatchLoadTexts" || n.type === "GlowLoader 加载文件夹文本"
+    );
+    const states = [];
+    for (const n of allNodes) {
+        if (n === excludeNode) continue;
+        const modeW = getNodeModeWidget(n);
+        const indexW = getNodeIndexWidget(n);
+        const seedW = getWidgetByName(n, "seed");
+        // 只同步当前为 single 模式的节点（batch 模式不需要 index）
+        if (modeW && modeW.value === "single" && indexW) {
+            const sequence = await generateSequenceForNode(n, stepCount);
+            states.push({
+                node: n,
+                modeWidget: modeW,
+                indexWidget: indexW,
+                prevIndex: indexW.value,
+                prevSeed: seedW?.value,
+                sequence: sequence,
+            });
+        }
+    }
+    return states;
+}
+
 async function queueAllSequential(node) {
     const sourceMode = getSourceModeValue(node);
     const texts0 = parseTextList(getTextListWidget(node)?.value);
@@ -134,11 +233,11 @@ async function queueAllSequential(node) {
         const shuffle = getShuffleValue(node);
         const allowDuplicate = getAllowDuplicateValue(node);
         const seed = getSeedValue(node);
-        
+
         // 文件模式下无法准确计算，使用简单循环
         if (sourceMode === "files") {
             const count = queueCount > 0 ? queueCount : texts.length;
-            sequence = Array.from({ length: count }, (_, i) => 
+            sequence = Array.from({ length: count }, (_, i) =>
                 shuffle ? Math.floor(Math.random() * texts.length) : i % texts.length
             );
         } else {
@@ -154,6 +253,13 @@ async function queueAllSequential(node) {
     const prevMode = wMode?.value;
     const prevIndex = wIndex?.value;
 
+    // 收集其他需要同步的节点（按各自配置生成序列）
+    const syncStates = await collectSyncNodeStates(node, sequence.length);
+
+    // 保存当前节点 seed 以便恢复
+    const wSeed = getWidgetByName(node, "seed");
+    const prevSeed = wSeed?.value;
+
     try {
         if (wMode) {
             wMode.value = "single";
@@ -165,7 +271,32 @@ async function queueAllSequential(node) {
             if (wIndex) {
                 wIndex.value = idx;
                 wIndex.callback?.(wIndex.value);
-            } else {
+            }
+
+            // 为当前节点生成新 seed（如果原 seed == -1），确保 IS_CHANGED 变化
+            if (wSeed && prevSeed === -1) {
+                const newSeed = Math.floor(Math.random() * 2147483647);
+                wSeed.value = newSeed;
+                wSeed.callback?.(newSeed);
+            }
+
+            // 同步其他 BatchLoadTexts 节点的 index 和 seed
+            for (const s of syncStates) {
+                if (s.sequence.length > 0) {
+                    const syncIdx = s.sequence[i % s.sequence.length];
+                    s.indexWidget.value = syncIdx;
+                    s.indexWidget.callback?.(syncIdx);
+                }
+                // 为其他节点也生成新 seed（如果原 seed == -1）
+                const syncSeedW = getWidgetByName(s.node, "seed");
+                if (syncSeedW && s.prevSeed === -1) {
+                    const newSeed = Math.floor(Math.random() * 2147483647);
+                    syncSeedW.value = newSeed;
+                    syncSeedW.callback?.(newSeed);
+                }
+            }
+
+            if (!wIndex) {
                 // Fallback: modify prompt JSON directly
                 const prompt = deepClone(await app.graphToPrompt());
                 const nodeId = String(node.id);
@@ -174,6 +305,22 @@ async function queueAllSequential(node) {
                 apiNode.inputs = apiNode.inputs || {};
                 apiNode.inputs.mode = "single";
                 apiNode.inputs.index = idx;
+                if (wSeed && prevSeed === -1) {
+                    apiNode.inputs.seed = wSeed.value;
+                }
+                // 同步其他节点到 prompt JSON
+                for (const s of syncStates) {
+                    const syncNodeId = String(s.node.id);
+                    const syncApiNode = prompt.output?.[syncNodeId];
+                    if (syncApiNode) {
+                        syncApiNode.inputs = syncApiNode.inputs || {};
+                        syncApiNode.inputs.index = s.indexWidget.value;
+                        const syncSeedW = getWidgetByName(s.node, "seed");
+                        if (syncSeedW && s.prevSeed === -1) {
+                            syncApiNode.inputs.seed = syncSeedW.value;
+                        }
+                    }
+                }
                 await api.queuePrompt(-1, prompt);
                 continue;
             }
@@ -187,6 +334,21 @@ async function queueAllSequential(node) {
         if (wIndex) {
             wIndex.value = prevIndex;
             wIndex.callback?.(wIndex.value);
+        }
+        // 恢复当前节点 seed
+        if (wSeed) {
+            wSeed.value = prevSeed;
+            wSeed.callback?.(prevSeed);
+        }
+        // 恢复其他节点的 index 和 seed
+        for (const s of syncStates) {
+            s.indexWidget.value = s.prevIndex;
+            s.indexWidget.callback?.(s.prevIndex);
+            const syncSeedW = getWidgetByName(s.node, "seed");
+            if (syncSeedW && s.prevSeed !== undefined) {
+                syncSeedW.value = s.prevSeed;
+                syncSeedW.callback?.(s.prevSeed);
+            }
         }
     }
 }
