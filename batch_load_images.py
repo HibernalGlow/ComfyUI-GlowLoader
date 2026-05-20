@@ -109,6 +109,8 @@ class BatchLoadImages:
             },
             "optional": {
                 "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
+                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1}),
+                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100}),
             }
         }
 
@@ -119,7 +121,8 @@ class BatchLoadImages:
     FUNCTION = "load_images"
     OUTPUT_NODE = True
 
-    def load_images(self, image_list: str, max_images: int, mode: str, index: int, trigger: bool = True):
+    def load_images(self, image_list: str, max_images: int, mode: str, index: int,
+                    trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
 
@@ -191,7 +194,8 @@ class BatchLoadImages:
         return (output_image, "\n".join(output_names), "\n".join(output_paths))
 
     @classmethod
-    def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int, trigger: bool = True):
+    def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int,
+                   trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
         m = hashlib.sha256()
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
@@ -219,7 +223,8 @@ class BatchLoadImages:
         return m.digest().hex()
 
     @classmethod
-    def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int, trigger: bool = True):
+    def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int,
+                        trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
         if max_images and max_images > 0:

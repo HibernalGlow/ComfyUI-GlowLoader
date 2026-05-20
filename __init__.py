@@ -1,5 +1,13 @@
-from .batch_load_images import BatchLoadImages, BatchSaveImages, VNCCS_PositionControl, VNCCS_VisualPositionControl
-from .batch_load_texts import BatchLoadTexts, QueueController
+try:
+    from .batch_load_images import BatchLoadImages, BatchSaveImages, VNCCS_PositionControl, VNCCS_VisualPositionControl
+    from .batch_load_texts import BatchLoadTexts
+except ImportError:
+    # Allow import outside ComfyUI (e.g. pytest with direct module imports)
+    BatchLoadImages = None
+    BatchSaveImages = None
+    BatchLoadTexts = None
+    VNCCS_PositionControl = None
+    VNCCS_VisualPositionControl = None
 
 try:
     from server import PromptServer  # type: ignore
@@ -35,7 +43,6 @@ NODE_CLASS_MAPPINGS = {
     "BatchLoadImages": BatchLoadImages,
     "BatchSaveImages": BatchSaveImages,
     "BatchLoadTexts": BatchLoadTexts,
-    "QueueController": QueueController,
     "VNCCS_PositionControl": VNCCS_PositionControl,
     "VNCCS_VisualPositionControl": VNCCS_VisualPositionControl,
 }
@@ -44,7 +51,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "BatchLoadImages": "GlowLoader 加载文件夹图像",
     "BatchSaveImages": "GlowLoader 保存文件夹图像",
     "BatchLoadTexts": "GlowLoader 加载文件夹文本",
-    "QueueController": "GlowLoader 队列控制器",
     "VNCCS_PositionControl": "VNCCS Position Control (Prompt)",
     "VNCCS_VisualPositionControl": "VNCCS Visual Position Control (Prompt)",
 }

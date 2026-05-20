@@ -205,42 +205,24 @@ async function queueCurrent(node) {
     await api.queuePrompt(-1, prompt);
 }
 
-// 从连接的 QueueController 节点读取队列阈值
-function getQueueThresholdFromController(node) {
-    const triggerInput = node.inputs?.find((inp) => inp.name === "trigger");
-    if (triggerInput && triggerInput.link != null) {
-        const link = app.graph.links?.[triggerInput.link];
-        if (link) {
-            const srcNode = app.graph.getNodeById(link.origin_id);
-            if (srcNode) {
-                const w = srcNode.widgets?.find((x) => x.name === "queue_threshold");
-                if (w && typeof w.value === "number" && w.value > 0) return w.value;
-            }
-        }
-    }
-    return 199;
+// 从节点自身读取队列阈值
+function getQueueThresholdValue(node) {
+    const w = node?.widgets?.find((x) => x.name === "queue_threshold");
+    const v = w?.value;
+    return typeof v === "number" && v > 0 ? v : 199;
 }
 
-// 从连接的 QueueController 节点读取检查间隔
-function getCheckIntervalFromController(node) {
-    const triggerInput = node.inputs?.find((inp) => inp.name === "trigger");
-    if (triggerInput && triggerInput.link != null) {
-        const link = app.graph.links?.[triggerInput.link];
-        if (link) {
-            const srcNode = app.graph.getNodeById(link.origin_id);
-            if (srcNode) {
-                const w = srcNode.widgets?.find((x) => x.name === "check_interval_ms");
-                if (w && typeof w.value === "number" && w.value > 0) return w.value;
-            }
-        }
-    }
-    return 1000;
+// 从节点自身读取检查间隔
+function getCheckIntervalValue(node) {
+    const w = node?.widgets?.find((x) => x.name === "check_interval_ms");
+    const v = w?.value;
+    return typeof v === "number" && v > 0 ? v : 1000;
 }
 
-// 等待队列有空位（从连接的 QueueController 读取阈值和间隔）
+// 等待队列有空位（从节点自身读取阈值和间隔）
 async function waitForQueueSpace(node, targetSpace = 1) {
-    const threshold = getQueueThresholdFromController(node);
-    const checkInterval = getCheckIntervalFromController(node);
+    const threshold = getQueueThresholdValue(node);
+    const checkInterval = getCheckIntervalValue(node);
     const maxWaitTime = 300000;
     const startTime = Date.now();
 
@@ -583,6 +565,48 @@ function createBrowserUI(node) {
     btnRow.appendChild(queueOneBtn);
     btnRow.appendChild(clearBtn);
 
+    // 队列设置行
+    const queueSettingsRow = document.createElement("div");
+    queueSettingsRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center;";
+
+    const mkLabel = (text) => {
+        const span = document.createElement("span");
+        span.textContent = text;
+        span.style.cssText = "font-size:11px;opacity:0.8;";
+        return span;
+    };
+
+    const mkInput = (type, value, onChange) => {
+        const input = document.createElement("input");
+        input.type = type;
+        input.value = value;
+        input.style.cssText = "width:60px;padding:4px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;font-size:12px;";
+        input.onchange = (e) => onChange?.(e.target.value);
+        return input;
+    };
+
+    queueSettingsRow.appendChild(mkLabel("队列阈值:"));
+    const thresholdInput = mkInput("number", getQueueThresholdValue(node), (v) => {
+        const w = getWidgetByName(node, "queue_threshold");
+        if (w) {
+            w.value = Math.max(1, Math.min(1000, parseInt(v) || 199));
+            w.callback?.(w.value);
+        }
+    });
+    thresholdInput.style.width = "50px";
+    queueSettingsRow.appendChild(thresholdInput);
+
+    queueSettingsRow.appendChild(mkLabel("检查间隔ms:"));
+    const intervalInput = mkInput("number", getCheckIntervalValue(node), (v) => {
+        const w = getWidgetByName(node, "check_interval_ms");
+        if (w) {
+            w.value = Math.max(100, Math.min(60000, parseInt(v) || 1000));
+            w.callback?.(w.value);
+        }
+    });
+    intervalInput.style.width = "60px";
+    queueSettingsRow.appendChild(intervalInput);
+
     const info = document.createElement("div");
     info.style.cssText = "font-size:12px;opacity:0.85;margin-bottom:6px;";
 
@@ -698,6 +722,7 @@ function createBrowserUI(node) {
     };
 
     container.appendChild(btnRow);
+    container.appendChild(queueSettingsRow);
     container.appendChild(info);
     container.appendChild(grid);
 
@@ -727,6 +752,16 @@ app.registerExtension({
             if (triggerWidget) {
                 triggerWidget.type = "hidden";
                 triggerWidget.computeSize = () => [0, -4];
+            }
+
+            // 隐藏队列控制 widget（通过 UI 控制）
+            const queueWidgets = ["queue_threshold", "check_interval_ms"];
+            for (const name of queueWidgets) {
+                const w = getWidgetByName(this, name);
+                if (w) {
+                    w.type = "hidden";
+                    w.computeSize = () => [0, -4];
+                }
             }
 
             // Create file-browser like UI

@@ -74,6 +74,8 @@ class BatchLoadTexts:
                 "shuffle": ("BOOLEAN", {"default": False}),
                 "allow_duplicate": ("BOOLEAN", {"default": True}),
                 "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
+                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1}),
+                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100}),
             }
         }
 
@@ -379,26 +381,3 @@ class BatchLoadTexts:
                         entries.append(line)
 
         return entries
-
-
-class QueueController:
-    """队列控制器：配置队列阈值和检查间隔，输出 trigger 信号触发批量节点入队"""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1}),
-                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100}),
-            }
-        }
-
-    CATEGORY = "ComfyUI-GlowLoader"
-
-    RETURN_TYPES = ("BOOLEAN",)
-    RETURN_NAMES = ("trigger",)
-    FUNCTION = "control"
-    OUTPUT_NODE = True
-
-    def control(self, queue_threshold: int, check_interval_ms: int):
-        return (True,)
