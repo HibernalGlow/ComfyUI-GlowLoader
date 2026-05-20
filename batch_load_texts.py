@@ -78,8 +78,8 @@ class BatchLoadTexts:
 
     CATEGORY = "ComfyUI-GlowLoader"
 
-    RETURN_TYPES = ("STRING", "STRING", "INT", "INT")
-    RETURN_NAMES = ("text", "all_texts", "current_index", "seed_out")
+    RETURN_TYPES = ("STRING", "STRING", "INT", "INT", "STRING")
+    RETURN_NAMES = ("text", "all_texts", "current_index", "seed_out", "filename")
     FUNCTION = "load_texts"
     OUTPUT_NODE = True
 
@@ -88,19 +88,23 @@ class BatchLoadTexts:
                    seed: int = -1, queue_count: int = 0,
                    shuffle: bool = False, allow_duplicate: bool = True):
 
-        # 根据 source_mode 获取 entries
+        # 根据 source_mode 获取 entries 和对应的文件名
         if source_mode == "direct":
-            # 直接输入模式：一行一个文本
+            # 直接输入模式：一行一个文本，文件名为空
             entries = [x.strip() for x in (text_list or "").splitlines() if x.strip()]
+            filenames = ["" for _ in entries]
         else:
-            # 文件模式：text_list 是文件列表
-            entries = self._load_from_files(text_list, file_mode)
+            # 文件模式：返回 (文本, 文件名) 元组列表
+            entries_with_files = self._load_from_files_with_names(text_list, file_mode)
+            entries = [e[0] for e in entries_with_files]
+            filenames = [e[1] for e in entries_with_files]
 
         if len(entries) == 0:
             raise ValueError("text_list is empty")
 
         if max_texts and max_texts > 0:
             entries = entries[:max_texts]
+            filenames = filenames[:max_texts]
 
         total = len(entries)
 
@@ -112,13 +116,15 @@ class BatchLoadTexts:
             effective_index = self._resolve_index(
                 total, index, shuffle, allow_duplicate, effective_seed
             )
-            return (entries[effective_index], "\n".join(entries), effective_index, effective_seed)
+            current_filename = filenames[effective_index] if effective_index < len(filenames) else ""
+            return (entries[effective_index], "\n".join(entries), effective_index, effective_seed, current_filename)
 
         # batch mode: 同样支持 shuffle，返回按规则计算的第一个
         effective_index = self._resolve_index(
             total, 0, shuffle, allow_duplicate, effective_seed
         )
-        return (entries[effective_index], "\n".join(entries), effective_index, effective_seed)
+        current_filename = filenames[effective_index] if effective_index < len(filenames) else ""
+        return (entries[effective_index], "\n".join(entries), effective_index, effective_seed, current_filename)
 
     @staticmethod
     def _resolve_index(total: int, index: int, shuffle: bool,
@@ -151,7 +157,12 @@ class BatchLoadTexts:
             return indices[index % total]
 
     def _load_from_files(self, text_list: str, file_mode: str):
-        """从文件加载文本"""
+        """从文件加载文本（兼容旧接口）"""
+        entries_with_names = self._load_from_files_with_names(text_list, file_mode)
+        return [e[0] for e in entries_with_names]
+
+    def _load_from_files_with_names(self, text_list: str, file_mode: str):
+        """从文件加载文本，返回 (文本, 文件名) 元组列表"""
         entries = []
         file_entries = [_parse_text_list_entry(x) for x in (text_list or "").splitlines()]
         file_entries = [(c, p) for c, p in file_entries if c]
@@ -161,7 +172,9 @@ class BatchLoadTexts:
                 continue
 
             file_path = folder_paths.get_annotated_filepath(comfy_name)
-            
+            # 提取文件名（不含扩展名）
+            filename = os.path.splitext(os.path.basename(file_path))[0]
+
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
@@ -172,13 +185,13 @@ class BatchLoadTexts:
                 # 整个文件作为一个 entry（去首尾空白）
                 content = content.strip()
                 if content:
-                    entries.append(content)
+                    entries.append((content, filename))
             else:
-                # 文件内每行作为一个 entry
+                # 文件内每行作为一个 entry，每行都关联同一个文件名
                 for line in content.splitlines():
                     line = line.strip()
                     if line:
-                        entries.append(line)
+                        entries.append((line, filename))
 
         return entries
 
