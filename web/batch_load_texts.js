@@ -304,9 +304,17 @@ async function queueAllSequential(node) {
             wMode.callback?.(wMode.value);
         }
 
+        // 第一次：获取当前队列大小，计算可直接入队的数量
+        const initialQueueSize = app.ui?.lastQueueSize || 0;
+        const threshold = getQueueThresholdValue(node);
+        const firstBatch = Math.max(0, threshold - initialQueueSize);
+        console.log(`[BatchLoadTexts] 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, sequence.length)}`);
+
         for (let i = 0; i < sequence.length; i++) {
-            // 检查队列空间，避免超过阈值限制
-            await waitForQueueSpace(node, 1);
+            // 超过首批数量后，才轮询等待队列空位
+            if (i >= firstBatch) {
+                await waitForQueueSpace(node, 1);
+            }
             
             const idx = sequence[i];
             if (wIndex) {

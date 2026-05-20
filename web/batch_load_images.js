@@ -251,8 +251,13 @@ async function queueAllSequential(node) {
         // Fallback: modify prompt JSON directly.
         const basePrompt = await app.graphToPrompt();
         const nodeId = String(node.id);
+        const initialQueueSize = app.ui?.lastQueueSize || 0;
+        const threshold = getQueueThresholdValue(node);
+        const firstBatch = Math.max(0, threshold - initialQueueSize);
         for (let i = 0; i < names.length; i++) {
-            await waitForQueueSpace(node, 1);
+            if (i >= firstBatch) {
+                await waitForQueueSpace(node, 1);
+            }
             const prompt = deepClone(basePrompt);
             const apiNode = prompt.output?.[nodeId];
             if (!apiNode) continue;
@@ -269,8 +274,17 @@ async function queueAllSequential(node) {
     try {
         wMode.value = "single";
         wMode.callback?.(wMode.value);
+        // 第一次：获取当前队列大小，计算可直接入队的数量
+        const initialQueueSize = app.ui?.lastQueueSize || 0;
+        const threshold = getQueueThresholdValue(node);
+        const firstBatch = Math.max(0, threshold - initialQueueSize);
+        console.log(`[BatchLoadImages] 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, names.length)}`);
+
         for (let i = 0; i < names.length; i++) {
-            await waitForQueueSpace(node, 1);
+            // 超过首批数量后，才轮询等待队列空位
+            if (i >= firstBatch) {
+                await waitForQueueSpace(node, 1);
+            }
             wIndex.value = i;
             wIndex.callback?.(wIndex.value);
             await queueCurrent(node);

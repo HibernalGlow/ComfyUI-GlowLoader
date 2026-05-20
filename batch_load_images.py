@@ -109,8 +109,8 @@ class BatchLoadImages:
             },
             "optional": {
                 "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
-                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1}),
-                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100}),
+                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1, "forceInput": True}),
+                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100, "forceInput": True}),
             }
         }
 
@@ -122,7 +122,16 @@ class BatchLoadImages:
     OUTPUT_NODE = True
 
     def load_images(self, image_list: str, max_images: int, mode: str, index: int,
-                    trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
+                    trigger: bool = True, queue_threshold=199, check_interval_ms=1000):
+        # 防御空字符串：前端可能传入空值
+        try:
+            queue_threshold = int(queue_threshold) if queue_threshold != '' else 199
+        except (ValueError, TypeError):
+            queue_threshold = 199
+        try:
+            check_interval_ms = int(check_interval_ms) if check_interval_ms != '' else 1000
+        except (ValueError, TypeError):
+            check_interval_ms = 1000
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
 

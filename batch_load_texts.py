@@ -74,8 +74,8 @@ class BatchLoadTexts:
                 "shuffle": ("BOOLEAN", {"default": False}),
                 "allow_duplicate": ("BOOLEAN", {"default": True}),
                 "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
-                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1}),
-                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100}),
+                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1, "forceInput": True}),
+                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100, "forceInput": True}),
             }
         }
 
@@ -88,9 +88,19 @@ class BatchLoadTexts:
 
     def load_texts(self, source_mode: str, text_list: str, file_mode: str,
                    max_texts: int, mode: str, index: int,
-                   seed: int = -1, queue_count: int = 0,
+                   seed=-1, queue_count=0,
                    shuffle: bool = False, allow_duplicate: bool = True,
-                   trigger: bool = True):
+                   trigger: bool = True,
+                   queue_threshold=199, check_interval_ms=1000):
+        # 防御空字符串：前端可能传入空值
+        try:
+            queue_threshold = int(queue_threshold) if queue_threshold != '' else 199
+        except (ValueError, TypeError):
+            queue_threshold = 199
+        try:
+            check_interval_ms = int(check_interval_ms) if check_interval_ms != '' else 1000
+        except (ValueError, TypeError):
+            check_interval_ms = 1000
 
         # 根据 source_mode 获取 entries 和对应的文件名
         if source_mode == "direct":
