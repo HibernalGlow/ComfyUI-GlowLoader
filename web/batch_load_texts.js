@@ -771,45 +771,15 @@ function createTextListUI(node) {
     };
 
     const redraw = () => {
-        const sourceMode = getSourceModeValue(node);
         const texts = parseTextList(getTextListWidget(node)?.value);
         listContainer.innerHTML = "";
 
-        // 直接输入模式下，显示多行文本编辑框
-        if (sourceMode === "direct") {
-            const textarea = document.createElement("textarea");
-            textarea.value = getTextListWidget(node)?.value || "";
-            textarea.placeholder = "每行一个条目，直接输入文本...";
-            textarea.style.cssText = `
-                width: 100%;
-                min-height: 200px;
-                background: var(--comfy-input-bg);
-                color: var(--input-text);
-                border: 1px solid var(--border-color);
-                border-radius: 4px;
-                padding: 8px;
-                font-size: 12px;
-                font-family: monospace;
-                resize: vertical;
-                box-sizing: border-box;
-            `;
-            textarea.oninput = (e) => {
-                const w = getTextListWidget(node);
-                if (w) {
-                    w.value = e.target.value;
-                    w.callback?.(w.value);
-                }
-                updateInfo();
-            };
-            listContainer.appendChild(textarea);
-            updateInfo();
-            return;
-        }
-
-        // 文件模式下，显示列表
         if (texts.length === 0) {
             const emptyMsg = document.createElement("div");
-            emptyMsg.textContent = "点击「选择文件」或「选择文件夹」加载文本文件";
+            const sourceMode = getSourceModeValue(node);
+            emptyMsg.textContent = sourceMode === "files" 
+                ? "点击「选择文件」或「选择文件夹」加载文本文件" 
+                : "点击「添加行」输入文本";
             emptyMsg.style.cssText = "text-align:center;padding:20px;opacity:0.6;font-size:12px;";
             listContainer.appendChild(emptyMsg);
             selectedIndex = -1;
@@ -948,69 +918,6 @@ app.registerExtension({
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== "BatchLoadTexts") return;
 
-        // 保存配置到工作流
-        const origSerialize = nodeType.prototype.serialize;
-        nodeType.prototype.serialize = function () {
-            const data = origSerialize?.apply(this, arguments) || {};
-            // 保存 UI 状态到节点数据
-            data.batch_load_texts_config = {
-                source_mode: getSourceModeValue(this),
-                file_mode: getFileModeValue(this),
-                max_texts: getMaxTextsValue(this),
-                queue_count: getQueueCountValue(this),
-                shuffle: getShuffleValue(this),
-                allow_duplicate: getAllowDuplicateValue(this),
-                seed: getSeedValue(this),
-            };
-            return data;
-        };
-
-        // 从工作流恢复配置
-        const origConfigure = nodeType.prototype.configure;
-        nodeType.prototype.configure = function (info) {
-            const r = origConfigure?.apply(this, arguments);
-            // 恢复 UI 状态
-            if (info.batch_load_texts_config) {
-                const cfg = info.batch_load_texts_config;
-                const wSource = getWidgetByName(this, "source_mode");
-                if (wSource && cfg.source_mode) {
-                    wSource.value = cfg.source_mode;
-                    wSource.callback?.(wSource.value);
-                }
-                const wFileMode = getWidgetByName(this, "file_mode");
-                if (wFileMode && cfg.file_mode) {
-                    wFileMode.value = cfg.file_mode;
-                    wFileMode.callback?.(wFileMode.value);
-                }
-                const wMaxTexts = getWidgetByName(this, "max_texts");
-                if (wMaxTexts && cfg.max_texts !== undefined) {
-                    wMaxTexts.value = cfg.max_texts;
-                    wMaxTexts.callback?.(wMaxTexts.value);
-                }
-                const wQueueCount = getWidgetByName(this, "queue_count");
-                if (wQueueCount && cfg.queue_count !== undefined) {
-                    wQueueCount.value = cfg.queue_count;
-                    wQueueCount.callback?.(wQueueCount.value);
-                }
-                const wShuffle = getWidgetByName(this, "shuffle");
-                if (wShuffle && cfg.shuffle !== undefined) {
-                    wShuffle.value = cfg.shuffle;
-                    wShuffle.callback?.(wShuffle.value);
-                }
-                const wAllowDup = getWidgetByName(this, "allow_duplicate");
-                if (wAllowDup && cfg.allow_duplicate !== undefined) {
-                    wAllowDup.value = cfg.allow_duplicate;
-                    wAllowDup.callback?.(wAllowDup.value);
-                }
-                const wSeed = getWidgetByName(this, "seed");
-                if (wSeed && cfg.seed !== undefined) {
-                    wSeed.value = cfg.seed;
-                    wSeed.callback?.(wSeed.value);
-                }
-            }
-            return r;
-        };
-
         const origOnNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = origOnNodeCreated?.apply(this, arguments);
@@ -1021,23 +928,13 @@ app.registerExtension({
                 textListWidget.computeSize = () => [0, -4];
             }
 
-            // 隐藏所有 widget，通过 UI 控制（但保留序列化）
+            // 隐藏所有 widget，通过 UI 控制
             const hiddenWidgets = ["source_mode", "file_mode", "max_texts", "queue_count", "shuffle", "allow_duplicate", "seed"];
             for (const name of hiddenWidgets) {
                 const w = getWidgetByName(this, name);
                 if (w) {
                     w.type = "hidden";
                     w.computeSize = () => [0, -4];
-                    // 确保 widget 值被正确初始化
-                    if (w.value === undefined || w.value === null) {
-                        if (name === "source_mode") w.value = "direct";
-                        else if (name === "file_mode") w.value = "one_per_file";
-                        else if (name === "max_texts") w.value = 0;
-                        else if (name === "queue_count") w.value = 0;
-                        else if (name === "shuffle") w.value = false;
-                        else if (name === "allow_duplicate") w.value = true;
-                        else if (name === "seed") w.value = -1;
-                    }
                 }
             }
 
