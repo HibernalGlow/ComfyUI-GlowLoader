@@ -65,6 +65,39 @@ function getSeedValue(node) {
     return typeof v === "number" ? v : -1;
 }
 
+// 从连接的 QueueController 节点读取队列阈值
+function getQueueThresholdFromController(node) {
+    // 查找连接到 trigger 输入的 QueueController 节点
+    const triggerInput = node.inputs?.find((inp) => inp.name === "trigger");
+    if (triggerInput && triggerInput.link != null) {
+        const link = app.graph.links?.[triggerInput.link];
+        if (link) {
+            const srcNode = app.graph.getNodeById(link.origin_id);
+            if (srcNode) {
+                const w = srcNode.widgets?.find((x) => x.name === "queue_threshold");
+                if (w && typeof w.value === "number" && w.value > 0) return w.value;
+            }
+        }
+    }
+    return 199; // 默认值
+}
+
+// 从连接的 QueueController 节点读取检查间隔
+function getCheckIntervalFromController(node) {
+    const triggerInput = node.inputs?.find((inp) => inp.name === "trigger");
+    if (triggerInput && triggerInput.link != null) {
+        const link = app.graph.links?.[triggerInput.link];
+        if (link) {
+            const srcNode = app.graph.getNodeById(link.origin_id);
+            if (srcNode) {
+                const w = srcNode.widgets?.find((x) => x.name === "check_interval_ms");
+                if (w && typeof w.value === "number" && w.value > 0) return w.value;
+            }
+        }
+    }
+    return 1000; // 默认值
+}
+
 function getWidgetByName(node, name) {
     return node?.widgets?.find((w) => w.name === name);
 }
@@ -72,6 +105,30 @@ function getWidgetByName(node, name) {
 async function queueCurrent(node) {
     const prompt = await app.graphToPrompt();
     await api.queuePrompt(-1, prompt);
+}
+
+// 等待队列有空位（从连接的 QueueController 读取阈值和间隔）
+async function waitForQueueSpace(node, targetSpace = 1) {
+    const threshold = getQueueThresholdFromController(node);
+    const checkInterval = getCheckIntervalFromController(node);
+    const maxWaitTime = 300000; // 最多等待 5 分钟
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitTime) {
+        // 获取当前队列大小
+        const queueSize = app.ui?.lastQueueSize || 0;
+        const remaining = threshold - queueSize;
+
+        if (remaining >= targetSpace) {
+            return true; // 有足够空间
+        }
+
+        console.log(`[BatchLoadTexts] 队列已满 (${queueSize}/${threshold})，等待 ${checkInterval}ms...`);
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+
+    console.warn(`[BatchLoadTexts] 等待队列空位超时，继续执行...`);
+    return false;
 }
 
 function deepClone(obj) {
@@ -267,6 +324,9 @@ async function queueAllSequential(node) {
         }
 
         for (let i = 0; i < sequence.length; i++) {
+            // 检查队列空间，避免超过阈值限制
+            await waitForQueueSpace(node, 1);
+            
             const idx = sequence[i];
             if (wIndex) {
                 wIndex.value = idx;
@@ -929,7 +989,7 @@ app.registerExtension({
             }
 
             // 隐藏所有 widget，通过 UI 控制
-            const hiddenWidgets = ["source_mode", "file_mode", "max_texts", "queue_count", "shuffle", "allow_duplicate", "seed"];
+            const hiddenWidgets = ["source_mode", "file_mode", "max_texts", "queue_count", "shuffle", "allow_duplicate", "seed", "trigger"];
             for (const name of hiddenWidgets) {
                 const w = getWidgetByName(this, name);
                 if (w) {
@@ -962,6 +1022,113 @@ app.registerExtension({
         nodeType.prototype.onExecuted = function (output) {
             origOnExecuted?.apply(this, arguments);
             this._batchLoadTextsUI?.redraw?.();
+        };
+    },
+});
+
+// QueueController 前端 UI
+app.registerExtension({
+    name: "QueueController.Extension",
+    async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData.name !== "QueueController") return;
+
+        const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+        nodeType.prototype.onNodeCreated = function () {
+            const r = origOnNodeCreated?.apply(this, arguments);
+
+            // 隐藏 widget，用自定义 UI 替代
+            const hiddenWidgets = ["queue_threshold", "check_interval_ms"];
+            for (const name of hiddenWidgets) {
+                const w = getWidgetByName(this, name);
+                if (w) {
+                    w.type = "hidden";
+                    w.computeSize = () => [0, -4];
+                }
+            }
+
+            const container = document.createElement("div");
+            container.style.cssText =
+                "width:100%;padding:8px;background:var(--comfy-menu-bg);border:1px solid var(--border-color);border-radius:6px;margin:5px 0;pointer-events:auto;";
+
+            // 队列阈值
+            const thresholdRow = document.createElement("div");
+            thresholdRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:8px;";
+            const thresholdLabel = document.createElement("div");
+            thresholdLabel.textContent = "队列阈值";
+            thresholdLabel.style.cssText = "font-size:12px;min-width:60px;";
+            const thresholdInput = document.createElement("input");
+            thresholdInput.type = "number";
+            thresholdInput.min = "1";
+            thresholdInput.max = "1000";
+            thresholdInput.style.cssText =
+                "width:80px;padding:4px 8px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;font-size:12px;";
+            const thresholdHint = document.createElement("div");
+            thresholdHint.textContent = "队列达到此数量时等待";
+            thresholdHint.style.cssText = "font-size:11px;opacity:0.7;";
+            thresholdRow.appendChild(thresholdLabel);
+            thresholdRow.appendChild(thresholdInput);
+            thresholdRow.appendChild(thresholdHint);
+
+            // 检查间隔
+            const intervalRow = document.createElement("div");
+            intervalRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:8px;";
+            const intervalLabel = document.createElement("div");
+            intervalLabel.textContent = "检查间隔";
+            intervalLabel.style.cssText = "font-size:12px;min-width:60px;";
+            const intervalInput = document.createElement("input");
+            intervalInput.type = "number";
+            intervalInput.min = "100";
+            intervalInput.max = "60000";
+            intervalInput.step = "100";
+            intervalInput.style.cssText =
+                "width:80px;padding:4px 8px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;font-size:12px;";
+            const intervalHint = document.createElement("div");
+            intervalHint.textContent = "ms 每次检查等待时间";
+            intervalHint.style.cssText = "font-size:11px;opacity:0.7;";
+            intervalRow.appendChild(intervalLabel);
+            intervalRow.appendChild(intervalInput);
+            intervalRow.appendChild(intervalHint);
+
+            // 提示信息
+            const hint = document.createElement("div");
+            hint.textContent = "将 trigger 输出连接到批量节点的 trigger 输入";
+            hint.style.cssText = "font-size:11px;opacity:0.6;text-align:center;padding:4px;";
+
+            container.appendChild(thresholdRow);
+            container.appendChild(intervalRow);
+            container.appendChild(hint);
+
+            // 同步 widget 值
+            const syncFromWidgets = () => {
+                const wThreshold = getWidgetByName(this, "queue_threshold");
+                const wInterval = getWidgetByName(this, "check_interval_ms");
+                if (wThreshold) thresholdInput.value = wThreshold.value;
+                if (wInterval) intervalInput.value = wInterval.value;
+            };
+
+            thresholdInput.oninput = () => {
+                const w = getWidgetByName(this, "queue_threshold");
+                if (w) {
+                    w.value = Math.max(1, Math.min(1000, parseInt(thresholdInput.value) || 199));
+                    w.callback?.(w.value);
+                }
+            };
+
+            intervalInput.oninput = () => {
+                const w = getWidgetByName(this, "check_interval_ms");
+                if (w) {
+                    w.value = Math.max(100, Math.min(60000, parseInt(intervalInput.value) || 1000));
+                    w.callback?.(w.value);
+                }
+            };
+
+            this.addDOMWidget("queue_controller", "customwidget", container);
+            this.setSize([300, 140]);
+
+            // 初始化
+            syncFromWidgets();
+
+            return r;
         };
     },
 });

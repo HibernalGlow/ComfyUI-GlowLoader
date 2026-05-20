@@ -73,6 +73,7 @@ class BatchLoadTexts:
                 "queue_count": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "shuffle": ("BOOLEAN", {"default": False}),
                 "allow_duplicate": ("BOOLEAN", {"default": True}),
+                "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
             }
         }
 
@@ -86,7 +87,8 @@ class BatchLoadTexts:
     def load_texts(self, source_mode: str, text_list: str, file_mode: str,
                    max_texts: int, mode: str, index: int,
                    seed: int = -1, queue_count: int = 0,
-                   shuffle: bool = False, allow_duplicate: bool = True):
+                   shuffle: bool = False, allow_duplicate: bool = True,
+                   trigger: bool = True):
 
         # 根据 source_mode 获取 entries 和对应的文件名
         if source_mode == "direct":
@@ -199,7 +201,8 @@ class BatchLoadTexts:
     def IS_CHANGED(s, source_mode: str, text_list: str, file_mode: str,
                    max_texts: int, mode: str, index: int,
                    seed: int = -1, queue_count: int = 0,
-                   shuffle: bool = False, allow_duplicate: bool = True):
+                   shuffle: bool = False, allow_duplicate: bool = True,
+                   trigger: bool = True):
         m = hashlib.sha256()
         
         # 计算 entries 用于 hash
@@ -249,7 +252,8 @@ class BatchLoadTexts:
     def VALIDATE_INPUTS(s, source_mode: str, text_list: str, file_mode: str,
                         max_texts: int, mode: str, index: int,
                         seed: int = -1, queue_count: int = 0,
-                        shuffle: bool = False, allow_duplicate: bool = True):
+                        shuffle: bool = False, allow_duplicate: bool = True,
+                        trigger: bool = True):
         
         # 检查是否有内容
         if source_mode == "direct":
@@ -375,3 +379,26 @@ class BatchLoadTexts:
                         entries.append(line)
 
         return entries
+
+
+class QueueController:
+    """队列控制器：配置队列阈值和检查间隔，输出 trigger 信号触发批量节点入队"""
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1}),
+                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100}),
+            }
+        }
+
+    CATEGORY = "ComfyUI-GlowLoader"
+
+    RETURN_TYPES = ("BOOLEAN",)
+    RETURN_NAMES = ("trigger",)
+    FUNCTION = "control"
+    OUTPUT_NODE = True
+
+    def control(self, queue_threshold: int, check_interval_ms: int):
+        return (True,)

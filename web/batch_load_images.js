@@ -205,6 +205,56 @@ async function queueCurrent(node) {
     await api.queuePrompt(-1, prompt);
 }
 
+// 从连接的 QueueController 节点读取队列阈值
+function getQueueThresholdFromController(node) {
+    const triggerInput = node.inputs?.find((inp) => inp.name === "trigger");
+    if (triggerInput && triggerInput.link != null) {
+        const link = app.graph.links?.[triggerInput.link];
+        if (link) {
+            const srcNode = app.graph.getNodeById(link.origin_id);
+            if (srcNode) {
+                const w = srcNode.widgets?.find((x) => x.name === "queue_threshold");
+                if (w && typeof w.value === "number" && w.value > 0) return w.value;
+            }
+        }
+    }
+    return 199;
+}
+
+// 从连接的 QueueController 节点读取检查间隔
+function getCheckIntervalFromController(node) {
+    const triggerInput = node.inputs?.find((inp) => inp.name === "trigger");
+    if (triggerInput && triggerInput.link != null) {
+        const link = app.graph.links?.[triggerInput.link];
+        if (link) {
+            const srcNode = app.graph.getNodeById(link.origin_id);
+            if (srcNode) {
+                const w = srcNode.widgets?.find((x) => x.name === "check_interval_ms");
+                if (w && typeof w.value === "number" && w.value > 0) return w.value;
+            }
+        }
+    }
+    return 1000;
+}
+
+// 等待队列有空位（从连接的 QueueController 读取阈值和间隔）
+async function waitForQueueSpace(node, targetSpace = 1) {
+    const threshold = getQueueThresholdFromController(node);
+    const checkInterval = getCheckIntervalFromController(node);
+    const maxWaitTime = 300000;
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitTime) {
+        const queueSize = app.ui?.lastQueueSize || 0;
+        const remaining = threshold - queueSize;
+        if (remaining >= targetSpace) return true;
+        console.log(`[BatchLoadImages] 队列已满 (${queueSize}/${threshold})，等待 ${checkInterval}ms...`);
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+    console.warn(`[BatchLoadImages] 等待队列空位超时，继续执行...`);
+    return false;
+}
+
 async function queueAllSequential(node) {
     const names0 = parseImageList(getImageListWidget(node)?.value);
     if (!names0 || names0.length === 0) return;
@@ -220,6 +270,7 @@ async function queueAllSequential(node) {
         const basePrompt = await app.graphToPrompt();
         const nodeId = String(node.id);
         for (let i = 0; i < names.length; i++) {
+            await waitForQueueSpace(node, 1);
             const prompt = deepClone(basePrompt);
             const apiNode = prompt.output?.[nodeId];
             if (!apiNode) continue;
@@ -237,6 +288,7 @@ async function queueAllSequential(node) {
         wMode.value = "single";
         wMode.callback?.(wMode.value);
         for (let i = 0; i < names.length; i++) {
+            await waitForQueueSpace(node, 1);
             wIndex.value = i;
             wIndex.callback?.(wIndex.value);
             await queueCurrent(node);
@@ -668,6 +720,13 @@ app.registerExtension({
                 // Hide the giant textbox; we manage it through the DOM UI.
                 imageListWidget.type = "hidden";
                 imageListWidget.computeSize = () => [0, -4];
+            }
+
+            // 隐藏 trigger widget（通过连线控制）
+            const triggerWidget = getWidgetByName(this, "trigger");
+            if (triggerWidget) {
+                triggerWidget.type = "hidden";
+                triggerWidget.computeSize = () => [0, -4];
             }
 
             // Create file-browser like UI

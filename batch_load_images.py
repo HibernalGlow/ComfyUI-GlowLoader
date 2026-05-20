@@ -106,6 +106,9 @@ class BatchLoadImages:
                 "max_images": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "mode": (["batch", "single"], {"default": "batch"}),
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+            },
+            "optional": {
+                "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
             }
         }
 
@@ -116,7 +119,7 @@ class BatchLoadImages:
     FUNCTION = "load_images"
     OUTPUT_NODE = True
 
-    def load_images(self, image_list: str, max_images: int, mode: str, index: int):
+    def load_images(self, image_list: str, max_images: int, mode: str, index: int, trigger: bool = True):
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
 
@@ -188,7 +191,7 @@ class BatchLoadImages:
         return (output_image, "\n".join(output_names), "\n".join(output_paths))
 
     @classmethod
-    def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int):
+    def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int, trigger: bool = True):
         m = hashlib.sha256()
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
@@ -216,7 +219,7 @@ class BatchLoadImages:
         return m.digest().hex()
 
     @classmethod
-    def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int):
+    def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int, trigger: bool = True):
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
         if max_images and max_images > 0:
