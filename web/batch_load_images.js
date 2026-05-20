@@ -628,50 +628,103 @@ function createBrowserUI(node) {
         const names = parseImageList(getImageListWidget(node)?.value);
         grid.innerHTML = "";
 
-        const frag = document.createDocumentFragment();
-        names.forEach((rawEntry, idx) => {
-            const parsed = parseImageListEntry(rawEntry);
-            const comfyName = parsed ? parsed.comfyName : rawEntry;
-            const displayLabel = parsed && parsed.originalRelPath !== parsed.comfyName ? parsed.originalRelPath : comfyName;
+        if (names.length > 10) {
+            // 超过10张：用文字列表展示，避免大量 img 请求导致卡顿
+            grid.style.gridTemplateColumns = "1fr";
+            grid.style.maxHeight = "200px";
 
-            const cell = document.createElement("div");
-            cell.style.cssText = "display:flex;flex-direction:column;gap:3px;";
+            const listEl = document.createElement("div");
+            listEl.style.cssText = "display:flex;flex-direction:column;gap:2px;";
 
-            const thumb = document.createElement("div");
-            thumb.style.cssText =
-                "position:relative;aspect-ratio:1;border-radius:4px;overflow:hidden;border:1px solid var(--border-color);background:#000;";
+            names.forEach((rawEntry, idx) => {
+                const parsed = parseImageListEntry(rawEntry);
+                const displayLabel = parsed && parsed.originalRelPath !== parsed.comfyName ? parsed.originalRelPath : (parsed ? parsed.comfyName : rawEntry);
 
-            const img = document.createElement("img");
-            img.src = getViewUrl(comfyName);
-            img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+                const row = document.createElement("div");
+                row.style.cssText = "display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 4px;border-radius:3px;";
+                row.onmouseenter = () => { row.style.background = "var(--comfy-input-bg)"; };
+                row.onmouseleave = () => { row.style.background = ""; };
 
-            const del = document.createElement("button");
-            del.textContent = "×";
-            del.title = "删除";
-            del.style.cssText =
-                "position:absolute;top:2px;right:2px;width:20px;height:20px;background:rgba(255,0,0,0.75);color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:16px;line-height:1;";
-            del.onclick = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const next = names.slice(0, idx).concat(names.slice(idx + 1));
-                setImageList(node, next);
-                redraw();
-            };
+                const idxSpan = document.createElement("span");
+                idxSpan.textContent = `${idx + 1}.`;
+                idxSpan.style.cssText = "opacity:0.5;min-width:24px;text-align:right;";
 
-            const label = document.createElement("div");
-            label.textContent = displayLabel;
-            label.title = displayLabel;
-            label.style.cssText =
-                "font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.9;";
+                const nameSpan = document.createElement("span");
+                nameSpan.textContent = displayLabel;
+                nameSpan.title = displayLabel;
+                nameSpan.style.cssText = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;";
 
-            thumb.appendChild(img);
-            thumb.appendChild(del);
-            cell.appendChild(thumb);
-            cell.appendChild(label);
-            frag.appendChild(cell);
-        });
+                const del = document.createElement("button");
+                del.textContent = "×";
+                del.title = "删除";
+                del.style.cssText =
+                    "width:18px;height:18px;background:rgba(255,0,0,0.6);color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:13px;line-height:1;flex-shrink:0;";
+                del.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const next = names.slice(0, idx).concat(names.slice(idx + 1));
+                    setImageList(node, next);
+                    redraw();
+                };
 
-        grid.appendChild(frag);
+                row.appendChild(idxSpan);
+                row.appendChild(nameSpan);
+                row.appendChild(del);
+                listEl.appendChild(row);
+            });
+
+            grid.appendChild(listEl);
+        } else {
+            // 10张及以下：显示缩略图
+            grid.style.gridTemplateColumns = "repeat(auto-fill,minmax(96px,1fr))";
+            grid.style.maxHeight = "260px";
+
+            const frag = document.createDocumentFragment();
+            names.forEach((rawEntry, idx) => {
+                const parsed = parseImageListEntry(rawEntry);
+                const comfyName = parsed ? parsed.comfyName : rawEntry;
+                const displayLabel = parsed && parsed.originalRelPath !== parsed.comfyName ? parsed.originalRelPath : comfyName;
+
+                const cell = document.createElement("div");
+                cell.style.cssText = "display:flex;flex-direction:column;gap:3px;";
+
+                const thumb = document.createElement("div");
+                thumb.style.cssText =
+                    "position:relative;aspect-ratio:1;border-radius:4px;overflow:hidden;border:1px solid var(--border-color);background:#000;";
+
+                const img = document.createElement("img");
+                img.src = getViewUrl(comfyName);
+                img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+
+                const del = document.createElement("button");
+                del.textContent = "×";
+                del.title = "删除";
+                del.style.cssText =
+                    "position:absolute;top:2px;right:2px;width:20px;height:20px;background:rgba(255,0,0,0.75);color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:16px;line-height:1;";
+                del.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const next = names.slice(0, idx).concat(names.slice(idx + 1));
+                    setImageList(node, next);
+                    redraw();
+                };
+
+                const label = document.createElement("div");
+                label.textContent = displayLabel;
+                label.title = displayLabel;
+                label.style.cssText =
+                    "font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.9;";
+
+                thumb.appendChild(img);
+                thumb.appendChild(del);
+                cell.appendChild(thumb);
+                cell.appendChild(label);
+                frag.appendChild(cell);
+            });
+
+            grid.appendChild(frag);
+        }
+
         updateInfo();
         app.graph.setDirtyCanvas(true);
     };
