@@ -1,5 +1,6 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import { QueueManager } from "./queue_manager.js";
 
 function getImageListWidget(node) {
     return node?.widgets?.find((w) => w.name === "image_list");
@@ -188,8 +189,7 @@ function getMaxImagesValue(node) {
 }
 
 function deepClone(obj) {
-    if (typeof structuredClone === "function") return structuredClone(obj);
-    return JSON.parse(JSON.stringify(obj));
+    return QueueManager.deepClone(obj);
 }
 
 function getWidgetByName(node, name) {
@@ -201,8 +201,8 @@ function getCameraDataWidget(node) {
 }
 
 async function queueCurrent(node) {
-    const prompt = await app.graphToPrompt();
-    await api.queuePrompt(-1, prompt);
+    const prompt = await QueueManager.getPrompt();
+    await QueueManager.enqueuePrompt(prompt);
 }
 
 // 从节点自身读取队列阈值
@@ -219,22 +219,11 @@ function getCheckIntervalValue(node) {
     return typeof v === "number" && v > 0 ? v : 1000;
 }
 
-// 等待队列有空位（从节点自身读取阈值和间隔）
+// 等待队列有空位（使用共享 QueueManager）
 async function waitForQueueSpace(node, targetSpace = 1) {
     const threshold = getQueueThresholdValue(node);
     const checkInterval = getCheckIntervalValue(node);
-    const maxWaitTime = 300000;
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < maxWaitTime) {
-        const queueSize = app.ui?.lastQueueSize || 0;
-        const remaining = threshold - queueSize;
-        if (remaining >= targetSpace) return true;
-        console.log(`[BatchLoadImages] 队列已满 (${queueSize}/${threshold})，等待 ${checkInterval}ms...`);
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
-    }
-    console.warn(`[BatchLoadImages] 等待队列空位超时，继续执行...`);
-    return false;
+    return QueueManager.waitForSpace(threshold, checkInterval, targetSpace);
 }
 
 async function queueAllSequential(node) {
@@ -249,9 +238,9 @@ async function queueAllSequential(node) {
     const wIndex = getWidgetByName(node, "index");
     if (!wMode || !wIndex) {
         // Fallback: modify prompt JSON directly.
-        const basePrompt = await app.graphToPrompt();
+        const basePrompt = await QueueManager.getPrompt();
         const nodeId = String(node.id);
-        const initialQueueSize = app.ui?.lastQueueSize || 0;
+        const initialQueueSize = QueueManager.getQueueSize();
         const threshold = getQueueThresholdValue(node);
         const firstBatch = Math.max(0, threshold - initialQueueSize);
         for (let i = 0; i < names.length; i++) {
@@ -264,7 +253,7 @@ async function queueAllSequential(node) {
             apiNode.inputs = apiNode.inputs || {};
             apiNode.inputs.mode = "single";
             apiNode.inputs.index = i;
-            await api.queuePrompt(-1, prompt);
+            await QueueManager.enqueuePrompt(prompt);
         }
         return;
     }
@@ -275,7 +264,7 @@ async function queueAllSequential(node) {
         wMode.value = "single";
         wMode.callback?.(wMode.value);
         // 第一次：获取当前队列大小，计算可直接入队的数量
-        const initialQueueSize = app.ui?.lastQueueSize || 0;
+        const initialQueueSize = QueueManager.getQueueSize();
         const threshold = getQueueThresholdValue(node);
         const firstBatch = Math.max(0, threshold - initialQueueSize);
         console.log(`[BatchLoadImages] 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, names.length)}`);
@@ -287,6 +276,8 @@ async function queueAllSequential(node) {
             }
             wIndex.value = i;
             wIndex.callback?.(wIndex.value);
+            // widget 已修改，清除 prompt 缓存
+            QueueManager.invalidatePromptCache();
             await queueCurrent(node);
         }
     } finally {

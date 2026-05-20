@@ -1,5 +1,6 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
+import { QueueManager } from "./queue_manager.js";
 
 function getTextListWidget(node) {
     return node?.widgets?.find((w) => w.name === "text_list");
@@ -84,37 +85,20 @@ function getWidgetByName(node, name) {
 }
 
 async function queueCurrent(node) {
-    const prompt = await app.graphToPrompt();
-    await api.queuePrompt(-1, prompt);
+    const prompt = await QueueManager.getPrompt();
+    await QueueManager.enqueuePrompt(prompt);
 }
 
-// 等待队列有空位（从节点自身读取阈值和间隔）
+// 等待队列有空位（使用共享 QueueManager）
 async function waitForQueueSpace(node, targetSpace = 1) {
     const threshold = getQueueThresholdValue(node);
     const checkInterval = getCheckIntervalValue(node);
-    const maxWaitTime = 300000; // 最多等待 5 分钟
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < maxWaitTime) {
-        // 获取当前队列大小
-        const queueSize = app.ui?.lastQueueSize || 0;
-        const remaining = threshold - queueSize;
-
-        if (remaining >= targetSpace) {
-            return true; // 有足够空间
-        }
-
-        console.log(`[BatchLoadTexts] 队列已满 (${queueSize}/${threshold})，等待 ${checkInterval}ms...`);
-        await new Promise(resolve => setTimeout(resolve, checkInterval));
-    }
-
-    console.warn(`[BatchLoadTexts] 等待队列空位超时，继续执行...`);
-    return false;
+    return QueueManager.waitForSpace(threshold, checkInterval, targetSpace);
 }
 
+// deepClone 委托给 QueueManager
 function deepClone(obj) {
-    if (typeof structuredClone === "function") return structuredClone(obj);
-    return JSON.parse(JSON.stringify(obj));
+    return QueueManager.deepClone(obj);
 }
 
 // 调用后端生成入队序列
@@ -305,7 +289,7 @@ async function queueAllSequential(node) {
         }
 
         // 第一次：获取当前队列大小，计算可直接入队的数量
-        const initialQueueSize = app.ui?.lastQueueSize || 0;
+        const initialQueueSize = QueueManager.getQueueSize();
         const threshold = getQueueThresholdValue(node);
         const firstBatch = Math.max(0, threshold - initialQueueSize);
         console.log(`[BatchLoadTexts] 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, sequence.length)}`);
@@ -345,9 +329,12 @@ async function queueAllSequential(node) {
                 }
             }
 
+            // widget 已修改，清除 prompt 缓存
+            QueueManager.invalidatePromptCache();
+
             if (!wIndex) {
                 // Fallback: modify prompt JSON directly
-                const prompt = deepClone(await app.graphToPrompt());
+                const prompt = deepClone(await QueueManager.getPrompt());
                 const nodeId = String(node.id);
                 const apiNode = prompt.output?.[nodeId];
                 if (!apiNode) continue;
@@ -370,7 +357,7 @@ async function queueAllSequential(node) {
                         }
                     }
                 }
-                await api.queuePrompt(-1, prompt);
+                await QueueManager.enqueuePrompt(prompt);
                 continue;
             }
             await queueCurrent(node);
