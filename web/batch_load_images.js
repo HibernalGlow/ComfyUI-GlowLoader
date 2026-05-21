@@ -234,57 +234,143 @@ async function queueAllSequential(node) {
     const names = maxImages && maxImages > 0 ? names0.slice(0, maxImages) : names0;
     if (names.length === 0) return;
 
-    const wMode = getWidgetByName(node, "mode");
-    const wIndex = getWidgetByName(node, "index");
-    if (!wMode || !wIndex) {
-        // Fallback: modify prompt JSON directly.
-        const basePrompt = await QueueManager.getPrompt();
-        const nodeId = String(node.id);
-        const initialQueueSize = QueueManager.getQueueSize();
-        const threshold = getQueueThresholdValue(node);
-        const firstBatch = Math.max(0, threshold - initialQueueSize);
-        for (let i = 0; i < names.length; i++) {
-            if (i >= firstBatch) {
-                await waitForQueueSpace(node, 1);
-            }
-            const prompt = deepClone(basePrompt);
-            const apiNode = prompt.output?.[nodeId];
-            if (!apiNode) continue;
-            apiNode.inputs = apiNode.inputs || {};
-            apiNode.inputs.mode = "single";
-            apiNode.inputs.index = i;
-            await QueueManager.enqueuePrompt(prompt);
-        }
-        return;
-    }
-
-    const prevMode = wMode.value;
-    const prevIndex = wIndex.value;
+    QueueManager.startQueuing();
     try {
-        wMode.value = "single";
-        wMode.callback?.(wMode.value);
-        // 第一次：获取当前队列大小，计算可直接入队的数量
-        const initialQueueSize = QueueManager.getQueueSize();
-        const threshold = getQueueThresholdValue(node);
-        const firstBatch = Math.max(0, threshold - initialQueueSize);
-        console.log(`[BatchLoadImages] 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, names.length)}`);
-
-        for (let i = 0; i < names.length; i++) {
-            // 超过首批数量后，才轮询等待队列空位
-            if (i >= firstBatch) {
-                await waitForQueueSpace(node, 1);
+        const wMode = getWidgetByName(node, "mode");
+        const wIndex = getWidgetByName(node, "index");
+        if (!wMode || !wIndex) {
+            const basePrompt = await QueueManager.getPrompt();
+            const nodeId = String(node.id);
+            const initialQueueSize = QueueManager.getQueueSize();
+            const threshold = getQueueThresholdValue(node);
+            const firstBatch = Math.max(0, threshold - initialQueueSize);
+            for (let i = 0; i < names.length; i++) {
+                if (QueueManager.aborted) { console.log("[BatchLoadImages] 已停止入队"); break; }
+                if (i >= firstBatch) {
+                    const ok = await waitForQueueSpace(node, 1);
+                    if (!ok) break;
+                }
+                const prompt = deepClone(basePrompt);
+                const apiNode = prompt.output?.[nodeId];
+                if (!apiNode) continue;
+                apiNode.inputs = apiNode.inputs || {};
+                apiNode.inputs.mode = "single";
+                apiNode.inputs.index = i;
+                await QueueManager.enqueuePrompt(prompt);
             }
-            wIndex.value = i;
+            return;
+        }
+
+        const prevMode = wMode.value;
+        const prevIndex = wIndex.value;
+        try {
+            wMode.value = "single";
+            wMode.callback?.(wMode.value);
+            const initialQueueSize = QueueManager.getQueueSize();
+            const threshold = getQueueThresholdValue(node);
+            const firstBatch = Math.max(0, threshold - initialQueueSize);
+            console.log(`[BatchLoadImages] 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, names.length)}`);
+
+            for (let i = 0; i < names.length; i++) {
+                if (QueueManager.aborted) { console.log("[BatchLoadImages] 已停止入队"); break; }
+                if (i >= firstBatch) {
+                    const ok = await waitForQueueSpace(node, 1);
+                    if (!ok) break;
+                }
+                wIndex.value = i;
+                wIndex.callback?.(wIndex.value);
+                QueueManager.invalidatePromptCache();
+                await queueCurrent(node);
+            }
+        } finally {
+            wMode.value = prevMode;
+            wMode.callback?.(wMode.value);
+            wIndex.value = prevIndex;
             wIndex.callback?.(wIndex.value);
-            // widget 已修改，清除 prompt 缓存
-            QueueManager.invalidatePromptCache();
-            await queueCurrent(node);
         }
     } finally {
-        wMode.value = prevMode;
-        wMode.callback?.(wMode.value);
-        wIndex.value = prevIndex;
-        wIndex.callback?.(wIndex.value);
+        QueueManager.endQueuing();
+    }
+}
+
+// Fisher-Yates 洗牌算法
+function shuffleArray(array) {
+    const arr = array.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
+async function queueAllShuffled(node) {
+    const names0 = parseImageList(getImageListWidget(node)?.value);
+    if (!names0 || names0.length === 0) return;
+
+    const maxImages = getMaxImagesValue(node);
+    const names = maxImages && maxImages > 0 ? names0.slice(0, maxImages) : names0;
+    if (names.length === 0) return;
+
+    // 生成乱序索引
+    const indices = shuffleArray(Array.from({ length: names.length }, (_, i) => i));
+
+    QueueManager.startQueuing();
+    try {
+        const wMode = getWidgetByName(node, "mode");
+        const wIndex = getWidgetByName(node, "index");
+        if (!wMode || !wIndex) {
+            const basePrompt = await QueueManager.getPrompt();
+            const nodeId = String(node.id);
+            const initialQueueSize = QueueManager.getQueueSize();
+            const threshold = getQueueThresholdValue(node);
+            const firstBatch = Math.max(0, threshold - initialQueueSize);
+            for (let i = 0; i < indices.length; i++) {
+                if (QueueManager.aborted) { console.log("[BatchLoadImages] 已停止入队"); break; }
+                if (i >= firstBatch) {
+                    const ok = await waitForQueueSpace(node, 1);
+                    if (!ok) break;
+                }
+                const idx = indices[i];
+                const prompt = deepClone(basePrompt);
+                const apiNode = prompt.output?.[nodeId];
+                if (!apiNode) continue;
+                apiNode.inputs = apiNode.inputs || {};
+                apiNode.inputs.mode = "single";
+                apiNode.inputs.index = idx;
+                await QueueManager.enqueuePrompt(prompt);
+            }
+            return;
+        }
+
+        const prevMode = wMode.value;
+        const prevIndex = wIndex.value;
+        try {
+            wMode.value = "single";
+            wMode.callback?.(wMode.value);
+            const initialQueueSize = QueueManager.getQueueSize();
+            const threshold = getQueueThresholdValue(node);
+            const firstBatch = Math.max(0, threshold - initialQueueSize);
+            console.log(`[BatchLoadImages] 乱序入队 - 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, indices.length)}`);
+
+            for (let i = 0; i < indices.length; i++) {
+                if (QueueManager.aborted) { console.log("[BatchLoadImages] 已停止入队"); break; }
+                if (i >= firstBatch) {
+                    const ok = await waitForQueueSpace(node, 1);
+                    if (!ok) break;
+                }
+                wIndex.value = indices[i];
+                wIndex.callback?.(wIndex.value);
+                QueueManager.invalidatePromptCache();
+                await queueCurrent(node);
+            }
+        } finally {
+            wMode.value = prevMode;
+            wMode.callback?.(wMode.value);
+            wIndex.value = prevIndex;
+            wIndex.callback?.(wIndex.value);
+        }
+    } finally {
+        QueueManager.endQueuing();
     }
 }
 
@@ -556,6 +642,7 @@ function createBrowserUI(node) {
     const addBtn = mkBtn("追加图片");
     const folderBtn = mkBtn("选择文件夹");
     const queueBtn = mkBtn("逐张入队");
+    const queueShuffleBtn = mkBtn("🔀 乱序入队");
     const queueOneBtn = mkBtn("入队当前");
 
     const clearBtn = document.createElement("button");
@@ -563,12 +650,22 @@ function createBrowserUI(node) {
     clearBtn.style.cssText =
         "padding:8px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;cursor:pointer;font-size:13px;";
 
+    const stopBtn = document.createElement("button");
+    stopBtn.textContent = "⏹ 停止";
+    stopBtn.style.cssText =
+        "padding:8px;background:rgba(200,50,50,0.8);color:#fff;border:1px solid rgba(200,50,50,0.9);border-radius:4px;cursor:pointer;font-size:13px;";
+    stopBtn.onclick = () => {
+        QueueManager.stop();
+    };
+
     btnRow.appendChild(replaceBtn);
     btnRow.appendChild(addBtn);
     btnRow.appendChild(folderBtn);
     btnRow.appendChild(queueBtn);
+    btnRow.appendChild(queueShuffleBtn);
     btnRow.appendChild(queueOneBtn);
     btnRow.appendChild(clearBtn);
+    btnRow.appendChild(stopBtn);
 
     // 队列设置行
     const queueSettingsRow = document.createElement("div");
@@ -765,6 +862,9 @@ function createBrowserUI(node) {
     };
     queueBtn.onclick = async () => {
         await queueAllSequential(node);
+    };
+    queueShuffleBtn.onclick = async () => {
+        await queueAllShuffled(node);
     };
     queueOneBtn.onclick = async () => {
         const wMode = getWidgetByName(node, "mode");

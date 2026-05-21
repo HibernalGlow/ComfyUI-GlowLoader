@@ -1,28 +1,35 @@
-/**
- * 共享队列管理器 - 全局单例
- *
- * 解决多节点同时轮询队列导致的性能问题：
- * - 共享一次 prompt 序列化（app.graphToPrompt 很重）
- * - 共享一次队列大小轮询
- * - 多节点入队时串行执行，避免竞争
- */
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 
 const QueueManager = {
-    /** 是否有入队任务正在运行 */
-    _running: false,
-
-    /** 入队任务队列 */
-    _queue: [],
-
-    /** 缓存的 prompt（一次序列化，多次使用） */
     _cachedPrompt: null,
     _cacheExpiry: 0,
 
-    /**
-     * 获取序列化后的 prompt（500ms 内缓存）
-     */
+    /** 中止标志 */
+    _aborted: false,
+
+    /** 当前是否正在入队 */
+    _queuing: false,
+
+    get aborted() {
+        return this._aborted;
+    },
+
+    get queuing() {
+        return this._queuing;
+    },
+
+    /** 请求中止当前入队操作 */
+    stop() {
+        this._aborted = true;
+        console.log("[QueueManager] 收到停止请求");
+    },
+
+    /** 重置中止标志（新一轮入队开始时调用） */
+    resetAbort() {
+        this._aborted = false;
+    },
+
     async getPrompt() {
         const now = Date.now();
         if (this._cachedPrompt && now - this._cacheExpiry < 500) {
@@ -33,30 +40,21 @@ const QueueManager = {
         return this._cachedPrompt;
     },
 
-    /** 清除 prompt 缓存（修改 widget 值后调用） */
     invalidatePromptCache() {
         this._cachedPrompt = null;
         this._cacheExpiry = 0;
     },
 
-    /**
-     * 获取当前队列大小
-     */
     getQueueSize() {
         return app.ui?.lastQueueSize || 0;
     },
 
-    /**
-     * 等待队列有空位
-     * @param {number} threshold - 队列阈值
-     * @param {number} checkInterval - 检查间隔 ms
-     * @param {number} targetSpace - 需要的空位数
-     */
     async waitForSpace(threshold, checkInterval, targetSpace = 1) {
         const maxWaitTime = 300000;
         const startTime = Date.now();
 
         while (Date.now() - startTime < maxWaitTime) {
+            if (this._aborted) return false;
             const queueSize = this.getQueueSize();
             if (threshold - queueSize >= targetSpace) {
                 return true;
@@ -65,23 +63,28 @@ const QueueManager = {
             await new Promise(resolve => setTimeout(resolve, checkInterval));
         }
 
-        console.warn(`[QueueManager] 等待队列空位超时，继续执行...`);
+        console.warn("[QueueManager] 等待队列空位超时，继续执行...");
         return false;
     },
 
-    /**
-     * 入队一个 prompt（串行执行，避免并发问题）
-     */
     async enqueuePrompt(prompt) {
         await api.queuePrompt(-1, prompt);
     },
 
-    /**
-     * 深拷贝
-     */
     deepClone(obj) {
         if (typeof structuredClone === "function") return structuredClone(obj);
         return JSON.parse(JSON.stringify(obj));
+    },
+
+    /** 标记入队开始 */
+    startQueuing() {
+        this._queuing = true;
+        this._aborted = false;
+    },
+
+    /** 标记入队结束 */
+    endQueuing() {
+        this._queuing = false;
     },
 };
 
