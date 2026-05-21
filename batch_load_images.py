@@ -108,6 +108,7 @@ class BatchLoadImages:
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
             },
             "optional": {
+                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "control_after_generate": True, "forceInput": True}),
                 "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
                 "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1, "forceInput": True}),
                 "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100, "forceInput": True}),
@@ -116,12 +117,12 @@ class BatchLoadImages:
 
     CATEGORY = "ComfyUI-GlowLoader"
 
-    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
-    RETURN_NAMES = ("images", "filenames", "paths")
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "INT")
+    RETURN_NAMES = ("images", "filenames", "paths", "seed_out")
     FUNCTION = "load_images"
     OUTPUT_NODE = True
 
-    def load_images(self, image_list: str, max_images: int, mode: str, index: int,
+    def load_images(self, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
                     trigger: bool = True, queue_threshold=199, check_interval_ms=1000):
         # 防御空字符串：前端可能传入空值
         try:
@@ -132,6 +133,11 @@ class BatchLoadImages:
             check_interval_ms = int(check_interval_ms) if check_interval_ms != '' else 1000
         except (ValueError, TypeError):
             check_interval_ms = 1000
+
+        # 确定实际使用的种子：seed==-1 时生成随机种子
+        import random as _random
+        effective_seed = seed if seed >= 0 else _random.randint(0, 2147483647)
+
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
 
@@ -139,6 +145,10 @@ class BatchLoadImages:
             entries = entries[:max_images]
 
         if mode == "single":
+            # seed >= 0 时用种子决定 index
+            if len(entries) > 0:
+                rng = _random.Random(effective_seed)
+                index = rng.randint(0, len(entries) - 1)
             if index < 0:
                 index = 0
             if index >= len(entries):
@@ -200,10 +210,10 @@ class BatchLoadImages:
             raise ValueError("No valid images found")
 
         output_image = torch.cat(output_images, dim=0)
-        return (output_image, "\n".join(output_names), "\n".join(output_paths))
+        return (output_image, "\n".join(output_names), "\n".join(output_paths), effective_seed)
 
     @classmethod
-    def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int,
+    def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
                    trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
         m = hashlib.sha256()
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
@@ -212,6 +222,10 @@ class BatchLoadImages:
             entries = entries[:max_images]
 
         if mode == "single":
+            if seed >= 0 and len(entries) > 0:
+                import random as _random
+                rng = _random.Random(seed)
+                index = rng.randint(0, len(entries) - 1)
             if index < 0:
                 index = 0
             if index >= len(entries):
@@ -221,6 +235,7 @@ class BatchLoadImages:
         m.update(str(mode).encode("utf-8"))
         m.update(str(index).encode("utf-8"))
         m.update(str(max_images).encode("utf-8"))
+        m.update(str(seed).encode("utf-8"))
         for comfy_name, original_relpath in entries:
             m.update(comfy_name.encode("utf-8"))
             m.update(original_relpath.encode("utf-8"))
@@ -232,7 +247,7 @@ class BatchLoadImages:
         return m.digest().hex()
 
     @classmethod
-    def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int,
+    def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
                         trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
@@ -242,10 +257,12 @@ class BatchLoadImages:
         if mode == "single":
             if len(entries) == 0:
                 return "image_list is empty"
-            if index < 0:
-                return "index must be >= 0"
-            if index >= len(entries):
-                return f"index out of range (0..{len(entries)-1})"
+            # seed >= 0 时由种子决定 index，不需要校验 index 范围
+            if seed < 0:
+                if index < 0:
+                    return "index must be >= 0"
+                if index >= len(entries):
+                    return f"index out of range (0..{len(entries)-1})"
 
         if len(entries) == 0:
             return "image_list is empty"

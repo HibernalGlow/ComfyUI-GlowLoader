@@ -188,6 +188,12 @@ function getMaxImagesValue(node) {
     return typeof v === "number" ? v : 0;
 }
 
+function getSeedValue(node) {
+    const w = node?.widgets?.find((x) => x.name === "seed");
+    const v = w?.value;
+    return typeof v === "number" ? v : -1;
+}
+
 function deepClone(obj) {
     return QueueManager.deepClone(obj);
 }
@@ -263,9 +269,16 @@ async function queueAllSequential(node) {
 
         const prevMode = wMode.value;
         const prevIndex = wIndex.value;
+        const wSeed = getWidgetByName(node, "seed");
+        const prevSeed = wSeed?.value;
         try {
             wMode.value = "single";
             wMode.callback?.(wMode.value);
+            // 逐张入队按顺序走 index，禁用 seed
+            if (wSeed) {
+                wSeed.value = -1;
+                wSeed.callback?.(-1);
+            }
             const initialQueueSize = QueueManager.getQueueSize();
             const threshold = getQueueThresholdValue(node);
             const firstBatch = Math.max(0, threshold - initialQueueSize);
@@ -287,6 +300,10 @@ async function queueAllSequential(node) {
             wMode.callback?.(wMode.value);
             wIndex.value = prevIndex;
             wIndex.callback?.(wIndex.value);
+            if (wSeed) {
+                wSeed.value = prevSeed;
+                wSeed.callback?.(prevSeed);
+            }
         }
     } finally {
         QueueManager.endQueuing();
@@ -344,9 +361,16 @@ async function queueAllShuffled(node) {
 
         const prevMode = wMode.value;
         const prevIndex = wIndex.value;
+        const wSeed = getWidgetByName(node, "seed");
+        const prevSeed = wSeed?.value;
         try {
             wMode.value = "single";
             wMode.callback?.(wMode.value);
+            // 乱序入队由前端 shuffle 决定 index，禁用 seed
+            if (wSeed) {
+                wSeed.value = -1;
+                wSeed.callback?.(-1);
+            }
             const initialQueueSize = QueueManager.getQueueSize();
             const threshold = getQueueThresholdValue(node);
             const firstBatch = Math.max(0, threshold - initialQueueSize);
@@ -368,6 +392,10 @@ async function queueAllShuffled(node) {
             wMode.callback?.(wMode.value);
             wIndex.value = prevIndex;
             wIndex.callback?.(wIndex.value);
+            if (wSeed) {
+                wSeed.value = prevSeed;
+                wSeed.callback?.(prevSeed);
+            }
         }
     } finally {
         QueueManager.endQueuing();
