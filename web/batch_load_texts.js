@@ -34,6 +34,7 @@ function parseTextList(text) {
 function setTextList(node, texts) {
     const w = getTextListWidget(node);
     if (!w) return;
+    console.log(`[BatchLoadTexts] setTextList - 写入 ${texts?.length || 0} 个条目`);
     w.value = (texts || []).join("\n");
     w.callback?.(w.value);
 }
@@ -615,6 +616,7 @@ async function uploadTextFilesSequential(node, files, { replace = false } = {}) 
     const w = getTextListWidget(node);
     if (!w) return [];
 
+    console.log(`[BatchLoadTexts] uploadTextFilesSequential - 接收 ${files?.length || 0} 个文件`);
     const existing = replace ? [] : parseTextList(w.value);
     const uploaded = [];
 
@@ -978,7 +980,7 @@ function createTextListUI(node) {
 
     const listContainer = document.createElement("div");
     listContainer.style.cssText =
-        "max-height:260px;overflow-y:auto;background:var(--comfy-input-bg);padding:6px;border-radius:4px;";
+        "max-height:400px;overflow-y:auto;background:var(--comfy-input-bg);padding:6px;border-radius:4px;";
 
     let selectedIndex = -1;
 
@@ -999,6 +1001,7 @@ function createTextListUI(node) {
 
     const redraw = () => {
         const texts = parseTextList(getTextListWidget(node)?.value);
+        console.log(`[BatchLoadTexts] redraw - 列表总数: ${texts.length}`);
         listContainer.innerHTML = "";
 
         if (texts.length === 0) {
