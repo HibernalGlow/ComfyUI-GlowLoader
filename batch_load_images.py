@@ -134,8 +134,9 @@ class BatchLoadImages:
         except (ValueError, TypeError):
             check_interval_ms = 1000
 
-        # 确定实际使用的种子：seed==-1 时生成随机种子
+        # 确定实际使用的种子：seed==-1 或 None 时生成随机种子
         import random as _random
+        seed = seed if seed is not None else -1
         effective_seed = seed if seed >= 0 else _random.randint(0, 2147483647)
 
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
@@ -215,6 +216,7 @@ class BatchLoadImages:
     @classmethod
     def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
                    trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
+        seed = seed if seed is not None else -1
         m = hashlib.sha256()
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
@@ -249,6 +251,7 @@ class BatchLoadImages:
     @classmethod
     def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
                         trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
+        seed = seed if seed is not None else -1
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
         if max_images and max_images > 0:
