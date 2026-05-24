@@ -10,6 +10,16 @@ except ImportError:
     VNCCS_VisualPositionControl = None
 
 try:
+    from .llm_chat import GlowAPILLMLoader, GlowExtraParameters, GlowAPIChat, GlowCaptioner, GlowGenerateBBOX, GlowApplyChatTemplate
+except ImportError:
+    GlowAPILLMLoader = None
+    GlowExtraParameters = None
+    GlowAPIChat = None
+    GlowCaptioner = None
+    GlowGenerateBBOX = None
+    GlowApplyChatTemplate = None
+
+try:
     from server import PromptServer  # type: ignore
 except ImportError:
     PromptServer = None
@@ -45,6 +55,12 @@ NODE_CLASS_MAPPINGS = {
     "BatchLoadTexts": BatchLoadTexts,
     "VNCCS_PositionControl": VNCCS_PositionControl,
     "VNCCS_VisualPositionControl": VNCCS_VisualPositionControl,
+    "GlowAPILLMLoader": GlowAPILLMLoader,
+    "GlowExtraParameters": GlowExtraParameters,
+    "GlowAPIChat": GlowAPIChat,
+    "GlowCaptioner": GlowCaptioner,
+    "GlowGenerateBBOX": GlowGenerateBBOX,
+    "GlowApplyChatTemplate": GlowApplyChatTemplate,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -53,6 +69,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "BatchLoadTexts": "GlowLoader 加载文件夹文本",
     "VNCCS_PositionControl": "VNCCS Position Control (Prompt)",
     "VNCCS_VisualPositionControl": "VNCCS Visual Position Control (Prompt)",
+    "GlowAPILLMLoader": "GlowLoader API LLM 加载器",
+    "GlowExtraParameters": "GlowLoader Extra Parameters",
+    "GlowAPIChat": "GlowLoader API Chat",
+    "GlowCaptioner": "GlowLoader Captioner",
+    "GlowGenerateBBOX": "GlowLoader Generate BBOXes",
+    "GlowApplyChatTemplate": "GlowLoader Apply Chat Template",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
