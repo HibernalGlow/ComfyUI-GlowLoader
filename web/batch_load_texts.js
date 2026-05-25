@@ -34,9 +34,16 @@ function parseTextList(text) {
 function setTextList(node, texts) {
     const w = getTextListWidget(node);
     if (!w) return;
+    const value = (texts || []).join("\n");
     console.log(`[BatchLoadTexts] setTextList - 写入 ${texts?.length || 0} 个条目`);
-    w.value = (texts || []).join("\n");
-    w.callback?.(w.value);
+    w.value = value;
+    // 同步 inputEl（STRING multiline widget 序列化时从 inputEl.value 读取）
+    if (w.inputEl) {
+        w.inputEl.value = value;
+        w.inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+        w.inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    w.callback?.(value);
 }
 
 function getMaxTextsValue(node) {
