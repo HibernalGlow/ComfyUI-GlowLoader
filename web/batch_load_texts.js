@@ -772,6 +772,8 @@ function createTextListUI(node) {
             w.value = e.target.value;
             w.callback?.(w.value);
         }
+        // 切换文件模式时重新获取展开条目
+        asyncRedraw();
     };
     
     fileModeRow.appendChild(fileModeLabel);
@@ -972,6 +974,7 @@ function createTextListUI(node) {
         if (confirm("确定要清空所有文本吗?")) {
             setTextList(node, []);
             selectedIndex = -1;
+            expandedEntries = null;
             redraw();
         }
     };
@@ -990,30 +993,74 @@ function createTextListUI(node) {
         "max-height:400px;overflow-y:auto;background:var(--comfy-input-bg);padding:6px;border-radius:4px;";
 
     let selectedIndex = -1;
+    // 缓存展开后的条目（文件模式下从后端获取）
+    let expandedEntries = null; // null 表示未加载，数组表示展开结果
+    let expandVersion = 0; // 用于取消过期的异步请求
+
+    // 从后端获取展开后的条目
+    const fetchExpandedEntries = async () => {
+        const sourceMode = getSourceModeValue(node);
+        if (sourceMode !== "files") {
+            expandedEntries = null;
+            return;
+        }
+        const textList = getTextListWidget(node)?.value || "";
+        const fileMode = getFileModeValue(node);
+        const maxTexts = getMaxTextsValue(node);
+        try {
+            const resp = await api.fetchApi("/glowloader/expand_text_entries", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    source_mode: sourceMode,
+                    text_list: textList,
+                    file_mode: fileMode,
+                    max_texts: maxTexts,
+                }),
+            });
+            if (!resp.ok) return;
+            const json = await resp.json();
+            expandedEntries = json.entries || [];
+        } catch (e) {
+            console.warn("[BatchLoadTexts] 获取展开条目失败:", e);
+            expandedEntries = null;
+        }
+    };
+
+    // 获取当前显示用的条目列表
+    const getDisplayEntries = () => {
+        const sourceMode = getSourceModeValue(node);
+        if (sourceMode === "files" && expandedEntries && expandedEntries.length > 0) {
+            return expandedEntries;
+        }
+        return parseTextList(getTextListWidget(node)?.value);
+    };
 
     const updateInfo = () => {
-        const texts = parseTextList(getTextListWidget(node)?.value);
+        const entries = getDisplayEntries();
         const queueCount = getQueueCountValue(node);
         const shuffle = getShuffleValue(node);
         const allowDup = getAllowDuplicateValue(node);
         const sourceMode = getSourceModeValue(node);
+        const fileMode = getFileModeValue(node);
         
         let modeText = sourceMode === "files" ? "[文件模式]" : "[直接输入]";
+        if (sourceMode === "files" && fileMode === "lines_per_file") modeText = "[文件·逐行]";
         if (shuffle) modeText += "[乱序]";
         if (!allowDup) modeText += "[不重复]";
         if (queueCount > 0) modeText += `[跑${queueCount}次]`;
         
-        info.textContent = `共 ${texts.length} 行 ${modeText}`;
+        info.textContent = `共 ${entries.length} 行 ${modeText}`;
     };
 
     const redraw = () => {
-        const texts = parseTextList(getTextListWidget(node)?.value);
-        console.log(`[BatchLoadTexts] redraw - 列表总数: ${texts.length}`);
+        const sourceMode = getSourceModeValue(node);
+        const entries = getDisplayEntries();
+        console.log(`[BatchLoadTexts] redraw - 列表总数: ${entries.length}, sourceMode: ${sourceMode}`);
         listContainer.innerHTML = "";
 
-        if (texts.length === 0) {
+        if (entries.length === 0) {
             const emptyMsg = document.createElement("div");
-            const sourceMode = getSourceModeValue(node);
             emptyMsg.textContent = sourceMode === "files" 
                 ? "点击「选择文件」或「选择文件夹」加载文本文件" 
                 : "点击「添加行」输入文本";
@@ -1025,7 +1072,7 @@ function createTextListUI(node) {
         }
 
         const frag = document.createDocumentFragment();
-        texts.forEach((text, idx) => {
+        entries.forEach((text, idx) => {
             const item = document.createElement("div");
             const isSelected = idx === selectedIndex;
             item.style.cssText = `
@@ -1049,23 +1096,27 @@ function createTextListUI(node) {
             content.style.cssText =
                 "flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
 
-            const del = document.createElement("button");
-            del.textContent = "×";
-            del.title = "删除";
-            del.style.cssText =
-                "width:20px;height:20px;background:rgba(255,0,0,0.75);color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:16px;line-height:1;";
-            del.onclick = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const next = texts.slice(0, idx).concat(texts.slice(idx + 1));
-                setTextList(node, next);
-                if (selectedIndex === idx) {
-                    selectedIndex = -1;
-                } else if (selectedIndex > idx) {
-                    selectedIndex--;
-                }
-                redraw();
-            };
+            // 文件模式下不允许删除展开后的单行条目
+            if (sourceMode !== "files") {
+                const del = document.createElement("button");
+                del.textContent = "×";
+                del.title = "删除";
+                del.style.cssText =
+                    "width:20px;height:20px;background:rgba(255,0,0,0.75);color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:16px;line-height:1;";
+                del.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const next = entries.slice(0, idx).concat(entries.slice(idx + 1));
+                    setTextList(node, next);
+                    if (selectedIndex === idx) {
+                        selectedIndex = -1;
+                    } else if (selectedIndex > idx) {
+                        selectedIndex--;
+                    }
+                    redraw();
+                };
+                item.appendChild(del);
+            }
 
             item.onclick = () => {
                 selectedIndex = idx;
@@ -1074,13 +1125,22 @@ function createTextListUI(node) {
 
             item.appendChild(num);
             item.appendChild(content);
-            item.appendChild(del);
             frag.appendChild(item);
         });
 
         listContainer.appendChild(frag);
         updateInfo();
         app.graph.setDirtyCanvas(true);
+    };
+
+    // 异步刷新：在文件模式下获取展开条目后重绘
+    const asyncRedraw = async () => {
+        const currentVersion = ++expandVersion;
+        await fetchExpandedEntries();
+        // 只有当前请求是最新的才重绘，避免竞态
+        if (currentVersion === expandVersion) {
+            redraw();
+        }
     };
 
     // 根据源模式更新 UI
@@ -1090,12 +1150,14 @@ function createTextListUI(node) {
             fileModeRow.style.display = "flex";
             fileBtnRow.style.display = "flex";
             directBtnRow.style.display = "none";
+            asyncRedraw();
         } else {
             fileModeRow.style.display = "none";
             fileBtnRow.style.display = "none";
             directBtnRow.style.display = "flex";
+            expandedEntries = null;
+            redraw();
         }
-        redraw();
     };
 
     // 拖拽支持
@@ -1132,7 +1194,7 @@ function createTextListUI(node) {
         }
         
         await uploadTextFilesSequential(node, files, { replace: false });
-        redraw();
+        asyncRedraw();
     });
 
     container.appendChild(sourceModeRow);
@@ -1147,7 +1209,7 @@ function createTextListUI(node) {
     // 初始化 UI 状态
     updateUIForSourceMode();
 
-    return { container, redraw };
+    return { container, redraw, asyncRedraw };
 }
 
 app.registerExtension({
@@ -1186,11 +1248,17 @@ app.registerExtension({
                 const origCallback = textListWidget.callback;
                 textListWidget.callback = function (value) {
                     origCallback?.call(this, value);
-                    ui.redraw();
+                    // 文件模式下需要异步获取展开条目
+                    const sourceMode = getSourceModeValue(this);
+                    if (sourceMode === "files") {
+                        ui.asyncRedraw();
+                    } else {
+                        ui.redraw();
+                    }
                 };
             }
 
-            ui.redraw();
+            ui.asyncRedraw();
 
             return r;
         };
@@ -1198,7 +1266,15 @@ app.registerExtension({
         const origOnExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function (output) {
             origOnExecuted?.apply(this, arguments);
-            this._batchLoadTextsUI?.redraw?.();
+            const ui = this._batchLoadTextsUI;
+            if (ui) {
+                const sourceMode = getSourceModeValue(this);
+                if (sourceMode === "files") {
+                    ui.asyncRedraw();
+                } else {
+                    ui.redraw();
+                }
+            }
         };
     },
 });

@@ -28,6 +28,37 @@ WEB_DIRECTORY = "./web"
 
 # Register API routes for text sequence generation
 if PromptServer is not None:
+    @PromptServer.instance.routes.post("/glowloader/expand_text_entries")
+    async def api_expand_text_entries(request):
+        import json
+        try:
+            data = await request.json()
+            source_mode = data.get("source_mode", "direct")
+            text_list = data.get("text_list", "")
+            file_mode = data.get("file_mode", "one_per_file")
+            max_texts = data.get("max_texts", 0)
+
+            if source_mode == "direct":
+                entries = [x.strip() for x in (text_list or "").splitlines() if x.strip()]
+                filenames = ["" for _ in entries]
+            else:
+                entries_with_files = BatchLoadTexts()._load_from_files_with_names(text_list, file_mode)
+                entries = [e[0] for e in entries_with_files]
+                filenames = [e[1] for e in entries_with_files]
+
+            if max_texts and max_texts > 0:
+                entries = entries[:max_texts]
+                filenames = filenames[:max_texts]
+
+            return PromptServer.instance.web.json_response({
+                "entries": entries,
+                "filenames": filenames,
+            })
+        except Exception as e:
+            return PromptServer.instance.web.json_response(
+                {"error": str(e)}, status=500
+            )
+
     @PromptServer.instance.routes.post("/glowloader/generate_sequence_texts")
     async def api_generate_sequence_texts(request):
         import json
