@@ -225,6 +225,25 @@ function getCheckIntervalValue(node) {
     return typeof v === "number" && v > 0 ? v : 1000;
 }
 
+// 从节点自身读取入队次数
+function getQueueCountValue(node) {
+    const w = node?.widgets?.find((x) => x.name === "queue_count");
+    const v = w?.value;
+    return typeof v === "number" && v >= 0 ? v : 0;
+}
+
+// 从节点自身读取是否乱序
+function getShuffleValue(node) {
+    const w = node?.widgets?.find((x) => x.name === "shuffle");
+    return w?.value === true;
+}
+
+// 从节点自身读取是否允许重复
+function getAllowDuplicateValue(node) {
+    const w = node?.widgets?.find((x) => x.name === "allow_duplicate");
+    return w?.value !== false; // 默认 true
+}
+
 // 等待队列有空位（使用共享 QueueManager）
 async function waitForQueueSpace(node, targetSpace = 1) {
     const threshold = getQueueThresholdValue(node);
@@ -240,17 +259,24 @@ async function queueAllSequential(node) {
     const names = maxImages && maxImages > 0 ? names0.slice(0, maxImages) : names0;
     if (names.length === 0) return;
 
+    const queueCount = getQueueCountValue(node);
+    const totalCount = queueCount > 0 ? queueCount : names.length;
+
     QueueManager.startQueuing();
     try {
         const wMode = getWidgetByName(node, "mode");
         const wIndex = getWidgetByName(node, "index");
+        const wShuffle = getWidgetByName(node, "shuffle");
+        const wAllowDup = getWidgetByName(node, "allow_duplicate");
+        const wSeed = getWidgetByName(node, "seed");
+
         if (!wMode || !wIndex) {
             const basePrompt = await QueueManager.getPrompt();
             const nodeId = String(node.id);
             const initialQueueSize = QueueManager.getQueueSize();
             const threshold = getQueueThresholdValue(node);
             const firstBatch = Math.max(0, threshold - initialQueueSize);
-            for (let i = 0; i < names.length; i++) {
+            for (let i = 0; i < totalCount; i++) {
                 if (QueueManager.aborted) { console.log("[BatchLoadImages] 已停止入队"); break; }
                 if (i >= firstBatch) {
                     const ok = await waitForQueueSpace(node, 1);
@@ -261,7 +287,7 @@ async function queueAllSequential(node) {
                 if (!apiNode) continue;
                 apiNode.inputs = apiNode.inputs || {};
                 apiNode.inputs.mode = "single";
-                apiNode.inputs.index = i;
+                apiNode.inputs.index = i % names.length;
                 await QueueManager.enqueuePrompt(prompt);
             }
             return;
@@ -269,28 +295,39 @@ async function queueAllSequential(node) {
 
         const prevMode = wMode.value;
         const prevIndex = wIndex.value;
-        const wSeed = getWidgetByName(node, "seed");
+        const prevShuffle = wShuffle?.value;
+        const prevAllowDup = wAllowDup?.value;
         const prevSeed = wSeed?.value;
+
         try {
             wMode.value = "single";
             wMode.callback?.(wMode.value);
-            // 逐张入队按顺序走 index，禁用 seed
+            // 顺序入队：禁用 shuffle 和 seed，按 index 顺序
+            if (wShuffle) {
+                wShuffle.value = false;
+                wShuffle.callback?.(false);
+            }
+            if (wAllowDup) {
+                wAllowDup.value = true; // 顺序入队允许重复（循环）
+                wAllowDup.callback?.(true);
+            }
             if (wSeed) {
                 wSeed.value = -1;
                 wSeed.callback?.(-1);
             }
+
             const initialQueueSize = QueueManager.getQueueSize();
             const threshold = getQueueThresholdValue(node);
             const firstBatch = Math.max(0, threshold - initialQueueSize);
-            console.log(`[BatchLoadImages] 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, names.length)}`);
+            console.log(`[BatchLoadImages] 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, totalCount)}`);
 
-            for (let i = 0; i < names.length; i++) {
+            for (let i = 0; i < totalCount; i++) {
                 if (QueueManager.aborted) { console.log("[BatchLoadImages] 已停止入队"); break; }
                 if (i >= firstBatch) {
                     const ok = await waitForQueueSpace(node, 1);
                     if (!ok) break;
                 }
-                wIndex.value = i;
+                wIndex.value = i % names.length;
                 wIndex.callback?.(wIndex.value);
                 QueueManager.invalidatePromptCache();
                 await queueCurrent(node);
@@ -300,6 +337,14 @@ async function queueAllSequential(node) {
             wMode.callback?.(wMode.value);
             wIndex.value = prevIndex;
             wIndex.callback?.(wIndex.value);
+            if (wShuffle) {
+                wShuffle.value = prevShuffle;
+                wShuffle.callback?.(prevShuffle);
+            }
+            if (wAllowDup) {
+                wAllowDup.value = prevAllowDup;
+                wAllowDup.callback?.(prevAllowDup);
+            }
             if (wSeed) {
                 wSeed.value = prevSeed;
                 wSeed.callback?.(prevSeed);
@@ -328,13 +373,35 @@ async function queueAllShuffled(node) {
     const names = maxImages && maxImages > 0 ? names0.slice(0, maxImages) : names0;
     if (names.length === 0) return;
 
+    const queueCount = getQueueCountValue(node);
+    const allowDuplicate = getAllowDuplicateValue(node);
+    const totalCount = queueCount > 0 ? queueCount : names.length;
+
     // 生成乱序索引
-    const indices = shuffleArray(Array.from({ length: names.length }, (_, i) => i));
+    let indices;
+    if (allowDuplicate) {
+        // 允许重复：纯随机选择
+        indices = Array.from({ length: totalCount }, () => Math.floor(Math.random() * names.length));
+    } else {
+        // 不允许重复：每轮重新打乱，每轮每张图只出现一次
+        indices = [];
+        let remaining = totalCount;
+        while (remaining > 0) {
+            const roundSize = Math.min(remaining, names.length);
+            const roundIndices = shuffleArray(Array.from({ length: names.length }, (_, i) => i)).slice(0, roundSize);
+            indices.push(...roundIndices);
+            remaining -= roundSize;
+        }
+    }
 
     QueueManager.startQueuing();
     try {
         const wMode = getWidgetByName(node, "mode");
         const wIndex = getWidgetByName(node, "index");
+        const wShuffle = getWidgetByName(node, "shuffle");
+        const wAllowDup = getWidgetByName(node, "allow_duplicate");
+        const wSeed = getWidgetByName(node, "seed");
+
         if (!wMode || !wIndex) {
             const basePrompt = await QueueManager.getPrompt();
             const nodeId = String(node.id);
@@ -354,6 +421,8 @@ async function queueAllShuffled(node) {
                 apiNode.inputs = apiNode.inputs || {};
                 apiNode.inputs.mode = "single";
                 apiNode.inputs.index = idx;
+                apiNode.inputs.shuffle = true;
+                apiNode.inputs.allow_duplicate = allowDuplicate;
                 await QueueManager.enqueuePrompt(prompt);
             }
             return;
@@ -361,16 +430,27 @@ async function queueAllShuffled(node) {
 
         const prevMode = wMode.value;
         const prevIndex = wIndex.value;
-        const wSeed = getWidgetByName(node, "seed");
+        const prevShuffle = wShuffle?.value;
+        const prevAllowDup = wAllowDup?.value;
         const prevSeed = wSeed?.value;
+
         try {
             wMode.value = "single";
             wMode.callback?.(wMode.value);
-            // 乱序入队由前端 shuffle 决定 index，禁用 seed
+            // 乱序入队：启用 shuffle，禁用 seed（由前端决定）
+            if (wShuffle) {
+                wShuffle.value = true;
+                wShuffle.callback?.(true);
+            }
+            if (wAllowDup) {
+                wAllowDup.value = allowDuplicate;
+                wAllowDup.callback?.(allowDuplicate);
+            }
             if (wSeed) {
                 wSeed.value = -1;
                 wSeed.callback?.(-1);
             }
+
             const initialQueueSize = QueueManager.getQueueSize();
             const threshold = getQueueThresholdValue(node);
             const firstBatch = Math.max(0, threshold - initialQueueSize);
@@ -392,6 +472,14 @@ async function queueAllShuffled(node) {
             wMode.callback?.(wMode.value);
             wIndex.value = prevIndex;
             wIndex.callback?.(wIndex.value);
+            if (wShuffle) {
+                wShuffle.value = prevShuffle;
+                wShuffle.callback?.(prevShuffle);
+            }
+            if (wAllowDup) {
+                wAllowDup.value = prevAllowDup;
+                wAllowDup.callback?.(prevAllowDup);
+            }
             if (wSeed) {
                 wSeed.value = prevSeed;
                 wSeed.callback?.(prevSeed);
@@ -737,6 +825,50 @@ function createBrowserUI(node) {
     intervalInput.style.width = "60px";
     queueSettingsRow.appendChild(intervalInput);
 
+    // 入队设置行（queue_count, shuffle, allow_duplicate）
+    const queueControlRow = document.createElement("div");
+    queueControlRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center;";
+
+    queueControlRow.appendChild(mkLabel("入队次数:"));
+    const queueCountInput = mkInput("number", getQueueCountValue(node), (v) => {
+        const w = getWidgetByName(node, "queue_count");
+        if (w) {
+            w.value = Math.max(0, parseInt(v) || 0);
+            w.callback?.(w.value);
+        }
+    });
+    queueCountInput.style.width = "60px";
+    queueCountInput.title = "0=全部入队";
+    queueControlRow.appendChild(queueCountInput);
+
+    queueControlRow.appendChild(mkLabel("乱序:"));
+    const shuffleCheckbox = document.createElement("input");
+    shuffleCheckbox.type = "checkbox";
+    shuffleCheckbox.checked = getShuffleValue(node);
+    shuffleCheckbox.style.cssText = "width:16px;height:16px;cursor:pointer;";
+    shuffleCheckbox.onchange = (e) => {
+        const w = getWidgetByName(node, "shuffle");
+        if (w) {
+            w.value = e.target.checked;
+            w.callback?.(w.value);
+        }
+    };
+    queueControlRow.appendChild(shuffleCheckbox);
+
+    queueControlRow.appendChild(mkLabel("允许重复:"));
+    const allowDupCheckbox = document.createElement("input");
+    allowDupCheckbox.type = "checkbox";
+    allowDupCheckbox.checked = getAllowDuplicateValue(node);
+    allowDupCheckbox.style.cssText = "width:16px;height:16px;cursor:pointer;";
+    allowDupCheckbox.onchange = (e) => {
+        const w = getWidgetByName(node, "allow_duplicate");
+        if (w) {
+            w.value = e.target.checked;
+            w.callback?.(w.value);
+        }
+    };
+    queueControlRow.appendChild(allowDupCheckbox);
+
     const info = document.createElement("div");
     info.style.cssText = "font-size:12px;opacity:0.85;margin-bottom:6px;";
 
@@ -909,6 +1041,7 @@ function createBrowserUI(node) {
 
     container.appendChild(btnRow);
     container.appendChild(queueSettingsRow);
+    container.appendChild(queueControlRow);
     container.appendChild(info);
     container.appendChild(grid);
 
@@ -941,7 +1074,7 @@ app.registerExtension({
             }
 
             // 隐藏队列控制 widget（通过 UI 控制）
-            const queueWidgets = ["queue_threshold", "check_interval_ms"];
+            const queueWidgets = ["queue_threshold", "check_interval_ms", "queue_count", "shuffle", "allow_duplicate"];
             for (const name of queueWidgets) {
                 const w = getWidgetByName(this, name);
                 if (w) {

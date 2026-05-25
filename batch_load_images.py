@@ -109,6 +109,9 @@ class BatchLoadImages:
             },
             "optional": {
                 "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "control_after_generate": True, "forceInput": True}),
+                "queue_count": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
+                "shuffle": ("BOOLEAN", {"default": False}),
+                "allow_duplicate": ("BOOLEAN", {"default": True}),
                 "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
                 "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1, "forceInput": True}),
                 "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100, "forceInput": True}),
@@ -123,6 +126,7 @@ class BatchLoadImages:
     OUTPUT_NODE = True
 
     def load_images(self, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
+                    queue_count: int = 0, shuffle: bool = False, allow_duplicate: bool = True,
                     trigger: bool = True, queue_threshold=199, check_interval_ms=1000):
         # 防御空字符串：前端可能传入空值
         try:
@@ -146,15 +150,13 @@ class BatchLoadImages:
             entries = entries[:max_images]
 
         if mode == "single":
-            # seed >= 0 时用种子决定 index
-            if len(entries) > 0:
-                rng = _random.Random(effective_seed)
-                index = rng.randint(0, len(entries) - 1)
-            if index < 0:
-                index = 0
-            if index >= len(entries):
-                index = len(entries) - 1
-            entries = [entries[index]]
+            # 根据 shuffle/seed/allow_duplicate 解析实际索引
+            effective_index = self._resolve_index(len(entries), index, shuffle, allow_duplicate, effective_seed)
+            if effective_index < 0:
+                effective_index = 0
+            if effective_index >= len(entries):
+                effective_index = len(entries) - 1
+            entries = [entries[effective_index]]
 
         if len(entries) == 0:
             raise ValueError("image_list is empty")
@@ -213,8 +215,40 @@ class BatchLoadImages:
         output_image = torch.cat(output_images, dim=0)
         return (output_image, "\n".join(output_names), "\n".join(output_paths), effective_seed)
 
+    @staticmethod
+    def _resolve_index(total: int, index: int, shuffle: bool,
+                        allow_duplicate: bool, seed: int) -> int:
+        """根据 shuffle/seed/allow_duplicate 解析实际索引。"""
+        if total <= 0:
+            return 0
+        if index < 0:
+            index = 0
+        if index >= total:
+            index = total - 1
+
+        if not shuffle:
+            return index
+
+        import random
+        # 使用 seed 决定随机状态；seed == -1 时回退到固定偏移
+        if seed >= 0:
+            rng = random.Random(seed)
+        else:
+            # 无明确种子时，用 index 做一个确定性偏移，保证同一 index 结果稳定
+            rng = random.Random(index)
+
+        if allow_duplicate:
+            # 允许重复：纯随机选一个
+            return rng.randint(0, total - 1)
+        else:
+            # 不允许重复：生成一个打乱序列，取第 index 个
+            indices = list(range(total))
+            rng.shuffle(indices)
+            return indices[index % total]
+
     @classmethod
     def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
+                   queue_count: int = 0, shuffle: bool = False, allow_duplicate: bool = True,
                    trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
         seed = seed if seed is not None else -1
         m = hashlib.sha256()
@@ -224,20 +258,19 @@ class BatchLoadImages:
             entries = entries[:max_images]
 
         if mode == "single":
-            if seed >= 0 and len(entries) > 0:
-                import random as _random
-                rng = _random.Random(seed)
-                index = rng.randint(0, len(entries) - 1)
-            if index < 0:
-                index = 0
-            if index >= len(entries):
-                index = len(entries) - 1
-            entries = entries[:1] if len(entries) == 0 else [entries[index]]
+            effective_index = s._resolve_index(len(entries), index, shuffle, allow_duplicate, seed)
+            if effective_index < 0:
+                effective_index = 0
+            if effective_index >= len(entries):
+                effective_index = len(entries) - 1
+            entries = entries[:1] if len(entries) == 0 else [entries[effective_index]]
 
         m.update(str(mode).encode("utf-8"))
         m.update(str(index).encode("utf-8"))
         m.update(str(max_images).encode("utf-8"))
         m.update(str(seed).encode("utf-8"))
+        m.update(str(shuffle).encode("utf-8"))
+        m.update(str(allow_duplicate).encode("utf-8"))
         for comfy_name, original_relpath in entries:
             m.update(comfy_name.encode("utf-8"))
             m.update(original_relpath.encode("utf-8"))
@@ -250,6 +283,7 @@ class BatchLoadImages:
 
     @classmethod
     def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
+                        queue_count: int = 0, shuffle: bool = False, allow_duplicate: bool = True,
                         trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
         seed = seed if seed is not None else -1
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
@@ -260,8 +294,8 @@ class BatchLoadImages:
         if mode == "single":
             if len(entries) == 0:
                 return "image_list is empty"
-            # seed >= 0 时由种子决定 index，不需要校验 index 范围
-            if seed < 0:
+            # shuffle=False 且 seed<0 时才校验 index 范围
+            if not shuffle and seed < 0:
                 if index < 0:
                     return "index must be >= 0"
                 if index >= len(entries):
