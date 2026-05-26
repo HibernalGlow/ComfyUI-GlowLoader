@@ -909,14 +909,16 @@ function createTextListUI(node) {
     const clearBtn2 = mkBtn("清空");
     
     addBtn.onclick = () => {
-        const texts = parseTextList(getTextListWidget(node)?.value);
+        // 保留空行，让用户可以编辑
+        const texts = (getTextListWidget(node)?.value || "").split("\n").map(s => s.trim());
         texts.push("");
         setTextList(node, texts);
         redraw();
     };
     
     insertBtn.onclick = () => {
-        const texts = parseTextList(getTextListWidget(node)?.value);
+        // 保留空行，让用户可以编辑
+        const texts = (getTextListWidget(node)?.value || "").split("\n").map(s => s.trim());
         const insertIdx = selectedIndex >= 0 ? selectedIndex : texts.length;
         texts.splice(insertIdx, 0, "");
         setTextList(node, texts);
@@ -928,6 +930,7 @@ function createTextListUI(node) {
         if (confirm("确定要清空所有文本吗?")) {
             setTextList(node, []);
             selectedIndex = -1;
+            expandedEntries = null;
             redraw();
         }
     };
@@ -1039,7 +1042,8 @@ function createTextListUI(node) {
             console.log(`[BatchLoadTexts] getDisplayEntries - 使用展开条目: ${expandedEntries.length} 个`);
             return expandedEntries;
         }
-        const raw = parseTextList(getTextListWidget(node)?.value);
+        // 直接输入模式：保留空行，让用户可以编辑
+        const raw = (getTextListWidget(node)?.value || "").split("\n").map(s => s.trim());
         console.log(`[BatchLoadTexts] getDisplayEntries - 使用原始列表: ${raw.length} 个, sourceMode: ${sourceMode}, expandedEntries: ${expandedEntries ? expandedEntries.length : 'null'}`);
         return raw;
     };
@@ -1267,6 +1271,7 @@ app.registerExtension({
                 };
             }
 
+            updateUIForSourceMode();
             ui.asyncRedraw();
 
             return r;

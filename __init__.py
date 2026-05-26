@@ -39,6 +39,7 @@ if PromptServer is not None:
             text_list = data.get("text_list", "")
             file_mode = data.get("file_mode", "one_per_file")
             max_texts = data.get("max_texts", 0)
+            print(f"[GlowLoader] expand_text_entries - source_mode: {source_mode}, file_mode: {file_mode}, text_list行数: {len(text_list.splitlines())}")
 
             if source_mode == "direct":
                 entries = [x.strip() for x in (text_list or "").splitlines() if x.strip()]
@@ -47,6 +48,7 @@ if PromptServer is not None:
                 entries_with_files = BatchLoadTexts()._load_from_files_with_names(text_list, file_mode)
                 entries = [e[0] for e in entries_with_files]
                 filenames = [e[1] for e in entries_with_files]
+                print(f"[GlowLoader] expand_text_entries - 展开后条目数: {len(entries)}")
 
             if max_texts and max_texts > 0:
                 entries = entries[:max_texts]
@@ -57,6 +59,7 @@ if PromptServer is not None:
                 "filenames": filenames,
             })
         except Exception as e:
+            print(f"[GlowLoader] expand_text_entries 错误: {e}")
             return web.json_response(
                 {"error": str(e)}, status=500
             )
