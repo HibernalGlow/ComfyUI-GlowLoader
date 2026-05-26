@@ -21,8 +21,10 @@ except ImportError:
 
 try:
     from server import PromptServer  # type: ignore
+    from aiohttp import web
 except ImportError:
     PromptServer = None
+    web = None
 
 WEB_DIRECTORY = "./web"
 
@@ -50,12 +52,12 @@ if PromptServer is not None:
                 entries = entries[:max_texts]
                 filenames = filenames[:max_texts]
 
-            return PromptServer.instance.web.json_response({
+            return web.json_response({
                 "entries": entries,
                 "filenames": filenames,
             })
         except Exception as e:
-            return PromptServer.instance.web.json_response(
+            return web.json_response(
                 {"error": str(e)}, status=500
             )
 
@@ -74,9 +76,9 @@ if PromptServer is not None:
                 data.get("allow_duplicate", True),
                 data.get("seed", -1),
             )
-            return PromptServer.instance.web.json_response({"sequence": sequence})
+            return web.json_response({"sequence": sequence})
         except Exception as e:
-            return PromptServer.instance.web.json_response(
+            return web.json_response(
                 {"error": str(e)}, status=500
             )
 
