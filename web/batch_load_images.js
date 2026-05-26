@@ -208,6 +208,16 @@ function getCameraDataWidget(node) {
 
 async function queueCurrent(node) {
     const prompt = await QueueManager.getPrompt();
+    // 调试：检查序列化后的 index 和 mode 值
+    const nodeId = String(node.id);
+    const apiNode = prompt.output?.[nodeId];
+    if (apiNode) {
+        console.log(`[BatchLoadImages] queueCurrent - node ${nodeId}, mode=${apiNode.inputs?.mode}, index=${apiNode.inputs?.index}, seed=${apiNode.inputs?.seed}, shuffle=${apiNode.inputs?.shuffle}`);
+        console.log(`[BatchLoadImages] queueCurrent - ALL inputs:`, JSON.stringify(apiNode.inputs));
+    } else {
+        console.warn(`[BatchLoadImages] queueCurrent - node ${nodeId} not found in prompt output!`);
+        console.log(`[BatchLoadImages] queueCurrent - prompt output keys:`, Object.keys(prompt.output || {}));
+    }
     await QueueManager.enqueuePrompt(prompt);
 }
 
@@ -437,10 +447,10 @@ async function queueAllShuffled(node) {
         try {
             wMode.value = "single";
             wMode.callback?.(wMode.value);
-            // 乱序入队：启用 shuffle，禁用 seed（由前端决定）
+            // 前端已经计算了随机索引，后端不需要再shuffle
             if (wShuffle) {
-                wShuffle.value = true;
-                wShuffle.callback?.(true);
+                wShuffle.value = false;
+                wShuffle.callback?.(false);
             }
             if (wAllowDup) {
                 wAllowDup.value = allowDuplicate;
@@ -739,6 +749,7 @@ function openFolderSelect(node, { replace = false } = {}) {
 }
 
 function createBrowserUI(node) {
+    let selectedIndex = -1;
     const container = document.createElement("div");
     container.style.cssText =
         "width:100%;padding:8px;background:var(--comfy-menu-bg);border:1px solid var(--border-color);border-radius:6px;margin:5px 0;pointer-events:auto;";
@@ -898,9 +909,10 @@ function createBrowserUI(node) {
                 const displayLabel = parsed && parsed.originalRelPath !== parsed.comfyName ? parsed.originalRelPath : (parsed ? parsed.comfyName : rawEntry);
 
                 const row = document.createElement("div");
-                row.style.cssText = "display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 4px;border-radius:3px;";
-                row.onmouseenter = () => { row.style.background = "var(--comfy-input-bg)"; };
-                row.onmouseleave = () => { row.style.background = ""; };
+                const isSelected = idx === selectedIndex;
+                row.style.cssText = `display:flex;align-items:center;gap:6px;font-size:11px;padding:2px 4px;border-radius:3px;cursor:pointer;border:1px solid ${isSelected ? "#4af" : "transparent"};${isSelected ? "background:rgba(68,170,255,0.15);" : ""}`;
+                row.onmouseenter = () => { if (!isSelected) row.style.background = "var(--comfy-input-bg)"; };
+                row.onmouseleave = () => { if (!isSelected) row.style.background = ""; };
 
                 const idxSpan = document.createElement("span");
                 idxSpan.textContent = `${idx + 1}.`;
@@ -921,12 +933,23 @@ function createBrowserUI(node) {
                     e.stopPropagation();
                     const next = names.slice(0, idx).concat(names.slice(idx + 1));
                     setImageList(node, next);
+                    if (selectedIndex === idx) {
+                        selectedIndex = -1;
+                    } else if (selectedIndex > idx) {
+                        selectedIndex--;
+                    }
                     redraw();
                 };
 
                 row.appendChild(idxSpan);
                 row.appendChild(nameSpan);
                 row.appendChild(del);
+                
+                row.onclick = () => {
+                    selectedIndex = idx;
+                    redraw();
+                };
+                
                 listEl.appendChild(row);
             });
 
@@ -943,11 +966,12 @@ function createBrowserUI(node) {
                 const displayLabel = parsed && parsed.originalRelPath !== parsed.comfyName ? parsed.originalRelPath : comfyName;
 
                 const cell = document.createElement("div");
-                cell.style.cssText = "display:flex;flex-direction:column;gap:3px;";
+                cell.style.cssText = "display:flex;flex-direction:column;gap:3px;cursor:pointer;";
 
                 const thumb = document.createElement("div");
+                const isSelected = idx === selectedIndex;
                 thumb.style.cssText =
-                    "position:relative;aspect-ratio:1;border-radius:4px;overflow:hidden;border:1px solid var(--border-color);background:#000;";
+                    `position:relative;aspect-ratio:1;border-radius:4px;overflow:hidden;border:2px solid ${isSelected ? "#4af" : "var(--border-color)"};background:#000;`;
 
                 const img = document.createElement("img");
                 img.src = getViewUrl(comfyName);
@@ -963,6 +987,11 @@ function createBrowserUI(node) {
                     e.stopPropagation();
                     const next = names.slice(0, idx).concat(names.slice(idx + 1));
                     setImageList(node, next);
+                    if (selectedIndex === idx) {
+                        selectedIndex = -1;
+                    } else if (selectedIndex > idx) {
+                        selectedIndex--;
+                    }
                     redraw();
                 };
 
@@ -976,6 +1005,12 @@ function createBrowserUI(node) {
                 thumb.appendChild(del);
                 cell.appendChild(thumb);
                 cell.appendChild(label);
+                
+                cell.onclick = () => {
+                    selectedIndex = idx;
+                    redraw();
+                };
+                
                 frag.appendChild(cell);
             });
 
@@ -1027,15 +1062,38 @@ function createBrowserUI(node) {
         await queueAllShuffled(node);
     };
     queueOneBtn.onclick = async () => {
+        const names = parseImageList(getImageListWidget(node)?.value);
+        if (!names || names.length === 0) {
+            console.warn("[BatchLoadImages] 没有图片可入队");
+            return;
+        }
         const wMode = getWidgetByName(node, "mode");
+        const wIndex = getWidgetByName(node, "index");
+        const wSeed = getWidgetByName(node, "seed");
+        console.log(`[BatchLoadImages] queueOneBtn - BEFORE: mode=${wMode?.value}, index=${wIndex?.value}, seed=${wSeed?.value}, selectedIndex=${selectedIndex}`);
         if (wMode) {
             wMode.value = "single";
             wMode.callback?.(wMode.value);
         }
+        // 如果没有选中图片，使用当前widget中的index值
+        const targetIndex = selectedIndex >= 0 ? selectedIndex : (wIndex?.value || 0);
+        if (wIndex) {
+            wIndex.value = targetIndex % names.length;
+            wIndex.callback?.(wIndex.value);
+        }
+        // seed=-1时生成随机种子，确保每次入队结果不同
+        if (wSeed && wSeed.value === -1) {
+            const newSeed = Math.floor(Math.random() * 2147483647);
+            wSeed.value = newSeed;
+            wSeed.callback?.(newSeed);
+        }
+        console.log(`[BatchLoadImages] queueOneBtn - AFTER: mode=${wMode?.value}, index=${wIndex?.value}, seed=${wSeed?.value}`);
+        QueueManager.invalidatePromptCache();
         await queueCurrent(node);
     };
     clearBtn.onclick = () => {
         setImageList(node, []);
+        selectedIndex = -1;
         redraw();
     };
 
@@ -1073,6 +1131,13 @@ app.registerExtension({
                 triggerWidget.computeSize = () => [0, -4];
             }
 
+            // 隐藏 seed widget（通过 DOM UI 控制）
+            const seedWidget = getWidgetByName(this, "seed");
+            if (seedWidget) {
+                seedWidget.type = "hidden";
+                seedWidget.computeSize = () => [0, -4];
+            }
+
             // 隐藏队列控制 widget（通过 UI 控制）
             const queueWidgets = ["queue_threshold", "check_interval_ms", "queue_count", "shuffle", "allow_duplicate"];
             for (const name of queueWidgets) {
@@ -1093,6 +1158,23 @@ app.registerExtension({
                             return isNaN(num) ? 0 : num;
                         };
                     }
+                }
+            }
+
+            // 确保index和max_images widget有正确的序列化
+            const intWidgets = ["index", "max_images"];
+            for (const name of intWidgets) {
+                const w = getWidgetByName(this, name);
+                if (w) {
+                    if (w.value === "" || w.value === null || w.value === undefined) {
+                        w.value = 0;
+                    }
+                    const origSerialize = w.serializeValue;
+                    w.serializeValue = async () => {
+                        const v = origSerialize ? await origSerialize() : w.value;
+                        const num = parseInt(v, 10);
+                        return isNaN(num) ? 0 : num;
+                    };
                 }
             }
 

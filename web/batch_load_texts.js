@@ -496,11 +496,18 @@ async function queueAllShuffled(node) {
 
         const wSeed = getWidgetByName(node, "seed");
         const prevSeed = wSeed?.value;
+        const wShuffle = getWidgetByName(node, "shuffle");
+        const prevShuffle = wShuffle?.value;
 
         try {
             if (wMode) {
                 wMode.value = "single";
                 wMode.callback?.(wMode.value);
+            }
+            // 前端已经计算了随机索引，后端不需要再shuffle
+            if (wShuffle) {
+                wShuffle.value = false;
+                wShuffle.callback?.(false);
             }
 
             const initialQueueSize = QueueManager.getQueueSize();
@@ -579,6 +586,10 @@ async function queueAllShuffled(node) {
             if (wIndex) {
                 wIndex.value = prevIndex;
                 wIndex.callback?.(wIndex.value);
+            }
+            if (wShuffle) {
+                wShuffle.value = prevShuffle;
+                wShuffle.callback?.(prevShuffle);
             }
             if (wSeed) {
                 wSeed.value = prevSeed;
@@ -962,11 +973,31 @@ function createTextListUI(node) {
     };
     
     queueOneBtn.onclick = async () => {
+        const entries = getDisplayEntries();
+        if (!entries || entries.length === 0) {
+            console.warn("[BatchLoadTexts] 没有文本可入队");
+            return;
+        }
         const wMode = getWidgetByName(node, "mode");
+        const wIndex = getWidgetByName(node, "index");
+        const wSeed = getWidgetByName(node, "seed");
         if (wMode) {
             wMode.value = "single";
             wMode.callback?.(wMode.value);
         }
+        // 如果有选中项，使用选中索引；否则使用当前widget中的index值
+        const targetIndex = selectedIndex >= 0 ? selectedIndex : (wIndex?.value || 0);
+        if (wIndex) {
+            wIndex.value = targetIndex % entries.length;
+            wIndex.callback?.(wIndex.value);
+        }
+        // seed=-1时生成随机种子，确保每次入队结果不同
+        if (wSeed && wSeed.value === -1) {
+            const newSeed = Math.floor(Math.random() * 2147483647);
+            wSeed.value = newSeed;
+            wSeed.callback?.(newSeed);
+        }
+        QueueManager.invalidatePromptCache();
         await queueCurrent(node);
     };
     
