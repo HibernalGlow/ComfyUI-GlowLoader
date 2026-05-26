@@ -1242,6 +1242,19 @@ app.registerExtension({
                 if (w) {
                     w.type = "hidden";
                     w.computeSize = () => [0, -4];
+                    // 确保INT类型widget有正确的默认值
+                    if (name === "queue_count" || name === "max_texts" || name === "seed" || name === "queue_threshold" || name === "check_interval_ms") {
+                        if (w.value === "" || w.value === null || w.value === undefined) {
+                            w.value = 0;
+                        }
+                        // 添加序列化钩子，确保值是数字
+                        const origSerialize = w.serializeValue;
+                        w.serializeValue = async () => {
+                            const v = origSerialize ? await origSerialize() : w.value;
+                            const num = parseInt(v, 10);
+                            return isNaN(num) ? 0 : num;
+                        };
+                    }
                 }
             }
 

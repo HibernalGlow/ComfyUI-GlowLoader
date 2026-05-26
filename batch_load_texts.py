@@ -84,7 +84,6 @@ class BatchLoadTexts:
     RETURN_TYPES = ("STRING", "STRING", "INT", "INT", "STRING")
     RETURN_NAMES = ("text", "all_texts", "current_index", "seed_out", "filename")
     FUNCTION = "load_texts"
-    OUTPUT_NODE = True
 
     def load_texts(self, source_mode: str, text_list: str, file_mode: str,
                    max_texts: int, mode: str, index: int,
