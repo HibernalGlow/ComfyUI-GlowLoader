@@ -123,7 +123,6 @@ class BatchLoadImages:
     RETURN_TYPES = ("IMAGE", "STRING", "STRING", "INT")
     RETURN_NAMES = ("images", "filenames", "paths", "seed_out")
     FUNCTION = "load_images"
-    OUTPUT_NODE = True
 
     def load_images(self, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
                     queue_count: int = 0, shuffle: bool = False, allow_duplicate: bool = True,
@@ -439,7 +438,6 @@ class BatchSaveImages:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("saved_paths",)
     FUNCTION = "save_images"
-    OUTPUT_NODE = True
 
     def save_images(self, images, paths: str, output_dir: str, format: str, quality: int):
         path_list = [x.strip() for x in (paths or "").splitlines() if x.strip()]
