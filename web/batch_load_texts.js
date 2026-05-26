@@ -1007,6 +1007,7 @@ function createTextListUI(node) {
         const textList = getTextListWidget(node)?.value || "";
         const fileMode = getFileModeValue(node);
         const maxTexts = getMaxTextsValue(node);
+        console.log(`[BatchLoadTexts] fetchExpandedEntries - sourceMode: ${sourceMode}, fileMode: ${fileMode}, textList长度: ${textList.length}`);
         try {
             const resp = await api.fetchApi("/glowloader/expand_text_entries", {
                 method: "POST",
@@ -1018,8 +1019,12 @@ function createTextListUI(node) {
                     max_texts: maxTexts,
                 }),
             });
-            if (!resp.ok) return;
+            if (!resp.ok) {
+                console.warn(`[BatchLoadTexts] fetchExpandedEntries API返回错误: ${resp.status}`);
+                return;
+            }
             const json = await resp.json();
+            console.log(`[BatchLoadTexts] fetchExpandedEntries - 返回 ${json.entries?.length || 0} 个条目`);
             expandedEntries = json.entries || [];
         } catch (e) {
             console.warn("[BatchLoadTexts] 获取展开条目失败:", e);
@@ -1031,9 +1036,12 @@ function createTextListUI(node) {
     const getDisplayEntries = () => {
         const sourceMode = getSourceModeValue(node);
         if (sourceMode === "files" && expandedEntries && expandedEntries.length > 0) {
+            console.log(`[BatchLoadTexts] getDisplayEntries - 使用展开条目: ${expandedEntries.length} 个`);
             return expandedEntries;
         }
-        return parseTextList(getTextListWidget(node)?.value);
+        const raw = parseTextList(getTextListWidget(node)?.value);
+        console.log(`[BatchLoadTexts] getDisplayEntries - 使用原始列表: ${raw.length} 个, sourceMode: ${sourceMode}, expandedEntries: ${expandedEntries ? expandedEntries.length : 'null'}`);
+        return raw;
     };
 
     const updateInfo = () => {
@@ -1244,12 +1252,13 @@ app.registerExtension({
             this.setSize([500, 520]);
 
             // Keep the DOM list in sync if something else changes the widget.
+            const _node = this;
             if (textListWidget) {
                 const origCallback = textListWidget.callback;
                 textListWidget.callback = function (value) {
                     origCallback?.call(this, value);
                     // 文件模式下需要异步获取展开条目
-                    const sourceMode = getSourceModeValue(this);
+                    const sourceMode = getSourceModeValue(_node);
                     if (sourceMode === "files") {
                         ui.asyncRedraw();
                     } else {

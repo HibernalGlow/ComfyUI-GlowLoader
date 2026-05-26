@@ -185,9 +185,7 @@ def chat_completion(
             "top_p": top_p,
             "max_tokens": max_tokens,
         }
-        if extra_parameters:
-            # FIX: Always pass thinking via extra_body, including "disabled"
-            # DeepSeek requires extra_body={"thinking": {"type": "disabled"}} to turn off thinking
+        if extra_parameters and extra_parameters.thinking:
             payload["extra_body"] = {}
             payload["extra_body"]["thinking"] = {"type": extra_parameters.thinking}
             if extra_parameters.thinking == "enabled":
@@ -394,9 +392,9 @@ class GlowAPIChat:
                 "unload_model_after_chat": ("BOOLEAN", {
                     "default": True,
                 }),
-                "enable_thinking": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Enable thinking/reasoning mode (e.g. DeepSeek CoT).",
+                "thinking": (["default", "enabled", "disabled"], {
+                    "default": "default",
+                    "tooltip": "default: don't pass thinking param; enabled: enable CoT; disabled: disable CoT (DeepSeek)",
                 }),
             },
             "optional": {
@@ -410,7 +408,7 @@ class GlowAPIChat:
     FUNCTION = "execute"
     CATEGORY = "GlowLoader/LLM"
 
-    def execute(self, client_info, system_prompt, user_prompt, temperature, top_p, top_k, max_tokens, unload_model_after_chat, enable_thinking, images=None, extra_parameters=None):
+    def execute(self, client_info, system_prompt, user_prompt, temperature, top_p, top_k, max_tokens, unload_model_after_chat, thinking, images=None, extra_parameters=None):
         pil_images = None
         if images is not None:
             pil_images = [tensor_to_pil(img) for img in images]
@@ -418,12 +416,11 @@ class GlowAPIChat:
         # Build extra_parameters: node toggle takes priority, then fall back to connected node
         if extra_parameters is None:
             extra_parameters = ExtraParameters(
-                thinking="enabled" if enable_thinking else "disabled",
+                thinking=thinking if thinking != "default" else None,
                 reasoning_effort="medium",
             )
-        elif enable_thinking and extra_parameters.thinking == "disabled":
-            # Node toggle overrides to enabled
-            extra_parameters.thinking = "enabled"
+        elif thinking != "default":
+            extra_parameters.thinking = thinking
 
         response = chat_completion(
             client_info=client_info,
@@ -459,9 +456,9 @@ class GlowCaptioner:
                 "unload_model_after_chat": ("BOOLEAN", {
                     "default": True,
                 }),
-                "enable_thinking": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Enable thinking/reasoning mode (e.g. DeepSeek CoT).",
+                "thinking": (["default", "enabled", "disabled"], {
+                    "default": "default",
+                    "tooltip": "default: don't pass thinking param; enabled: enable CoT; disabled: disable CoT (DeepSeek)",
                 }),
             },
             "optional": {
@@ -474,17 +471,17 @@ class GlowCaptioner:
     FUNCTION = "execute"
     CATEGORY = "GlowLoader/LLM"
 
-    def execute(self, client_info, image, language, num_max_sentences, unload_model_after_chat, enable_thinking, extra_parameters=None):
+    def execute(self, client_info, image, language, num_max_sentences, unload_model_after_chat, thinking, extra_parameters=None):
         pil_image = tensor_to_pil(image)
 
         # Build extra_parameters: node toggle takes priority, then fall back to connected node
         if extra_parameters is None:
             extra_parameters = ExtraParameters(
-                thinking="enabled" if enable_thinking else "disabled",
+                thinking=thinking if thinking != "default" else None,
                 reasoning_effort="medium",
             )
-        elif enable_thinking and extra_parameters.thinking == "disabled":
-            extra_parameters.thinking = "enabled"
+        elif thinking != "default":
+            extra_parameters.thinking = thinking
 
         system_prompt = (
             "As a professional image annotator, "
