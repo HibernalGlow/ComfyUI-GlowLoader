@@ -108,13 +108,13 @@ class BatchLoadImages:
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
             },
             "optional": {
-                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "control_after_generate": True}),
+                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "control_after_generate": True, "forceInput": True}),
                 "queue_count": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "shuffle": ("BOOLEAN", {"default": False}),
                 "allow_duplicate": ("BOOLEAN", {"default": True}),
-                "trigger": ("BOOLEAN", {"default": True}),
-                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1}),
-                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100}),
+                "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
+                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1, "forceInput": True}),
+                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100, "forceInput": True}),
             }
         }
 
@@ -127,7 +127,6 @@ class BatchLoadImages:
     def load_images(self, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
                     queue_count: int = 0, shuffle: bool = False, allow_duplicate: bool = True,
                     trigger: bool = True, queue_threshold=199, check_interval_ms=1000):
-        print(f"[BatchLoadImages] load_images - mode={mode}, index={index}, seed={seed}, shuffle={shuffle}, allow_duplicate={allow_duplicate}")
         # 防御空字符串：前端可能传入空值
         try:
             queue_threshold = int(queue_threshold) if queue_threshold != '' else 199
