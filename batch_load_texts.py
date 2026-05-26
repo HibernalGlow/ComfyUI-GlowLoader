@@ -180,24 +180,19 @@ class BatchLoadTexts:
         entries = []
         file_entries = [_parse_text_list_entry(x) for x in (text_list or "").splitlines()]
         file_entries = [(c, p) for c, p in file_entries if c]
-        print(f"[BatchLoadTexts] _load_from_files_with_names - 文件条目数: {len(file_entries)}, file_mode: {file_mode}")
 
         for comfy_name, original_relpath in file_entries:
-            exists = folder_paths.exists_annotated_filepath(comfy_name)
-            print(f"[BatchLoadTexts] 检查文件 '{comfy_name}' - exists: {exists}")
-            if not exists:
+            if not folder_paths.exists_annotated_filepath(comfy_name):
                 continue
 
             file_path = folder_paths.get_annotated_filepath(comfy_name)
-            print(f"[BatchLoadTexts] 文件路径: {file_path}")
             # 提取文件名（不含扩展名）
             filename = os.path.splitext(os.path.basename(file_path))[0]
 
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
-            except Exception as e:
-                print(f"[BatchLoadTexts] 读取文件失败: {e}")
+            except Exception:
                 continue
 
             if file_mode == "one_per_file":
@@ -212,7 +207,6 @@ class BatchLoadTexts:
                     if line:
                         entries.append((line, filename))
 
-        print(f"[BatchLoadTexts] _load_from_files_with_names - 返回条目数: {len(entries)}")
         return entries
 
     @classmethod
