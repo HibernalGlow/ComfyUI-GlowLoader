@@ -265,11 +265,14 @@ def chat_completion(
     else:
         raise ValueError("The client type is not supported.")
 
-    # Call the API
+    # Call the API with timing
+    import time
+    start_time = time.time()
     try:
         response = client_info.chat_func(**payload)
     except Exception as e:
         raise RuntimeError(f"Error in chat completion: {e}") from e
+    elapsed_time = time.time() - start_time
 
     # Parse the response
     if client_info.client_type in ["openai", "mistral"]:
@@ -282,7 +285,7 @@ def chat_completion(
         result: str = response.content[0].text
     else:
         raise ValueError("The message type is not supported.")
-    return result
+    return result, elapsed_time
 
 
 # ─── ComfyUI Node Definitions ───────────────────────────────────
@@ -403,8 +406,8 @@ class GlowAPIChat:
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("response",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("response", "elapsed_time")
     FUNCTION = "execute"
     CATEGORY = "GlowLoader/LLM"
 
@@ -422,7 +425,7 @@ class GlowAPIChat:
         elif thinking != "default":
             extra_parameters.thinking = thinking
 
-        response = chat_completion(
+        response, elapsed = chat_completion(
             client_info=client_info,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -434,7 +437,8 @@ class GlowAPIChat:
             unload_after_chat=unload_model_after_chat,
             extra_parameters=extra_parameters,
         )
-        return (response,)
+        elapsed_str = f"{elapsed:.2f}s"
+        return {"ui": {"text": [elapsed_str]}, "result": (response, elapsed_str)}
 
 
 class GlowCaptioner:
@@ -466,8 +470,8 @@ class GlowCaptioner:
             },
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("caption",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("caption", "elapsed_time")
     FUNCTION = "execute"
     CATEGORY = "GlowLoader/LLM"
 
@@ -505,7 +509,7 @@ class GlowCaptioner:
             f"with maximum {num_max_sentences} sentences."
         )
 
-        response = chat_completion(
+        response, elapsed = chat_completion(
             client_info=client_info,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -516,7 +520,8 @@ class GlowCaptioner:
             unload_after_chat=unload_model_after_chat,
             extra_parameters=extra_parameters,
         )
-        return (response,)
+        elapsed_str = f"{elapsed:.2f}s"
+        return {"ui": {"text": [elapsed_str]}, "result": (response, elapsed_str)}
 
 
 class GlowGenerateBBOX:
@@ -538,8 +543,8 @@ class GlowGenerateBBOX:
             },
         }
 
-    RETURN_TYPES = ("BBOX", "IMAGE")
-    RETURN_NAMES = ("bbox", "bbox_preview")
+    RETURN_TYPES = ("BBOX", "IMAGE", "STRING")
+    RETURN_NAMES = ("bbox", "bbox_preview", "elapsed_time")
     FUNCTION = "execute"
     CATEGORY = "GlowLoader/LLM"
 
@@ -556,7 +561,7 @@ class GlowGenerateBBOX:
 
         extra_parameters = ExtraParameters(thinking="enabled", reasoning_effort="medium")
 
-        response = chat_completion(
+        response, elapsed = chat_completion(
             client_info=client_info,
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -590,7 +595,8 @@ class GlowGenerateBBOX:
                 draw.rectangle([x1, y1, x1 + x2, y1 + y2], outline="red", width=2)
 
         result_image = pil_to_tensor(draw_image)
-        return (bboxes, result_image)
+        elapsed_str = f"{elapsed:.2f}s"
+        return {"ui": {"text": [elapsed_str]}, "result": (bboxes, result_image, elapsed_str)}
 
 
 class GlowApplyChatTemplate:
