@@ -120,8 +120,8 @@ class BatchLoadImages:
 
     CATEGORY = "ComfyUI-GlowLoader"
 
-    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "INT")
-    RETURN_NAMES = ("images", "filenames", "paths", "seed_out")
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "INT", "INT")
+    RETURN_NAMES = ("images", "filenames", "paths", "seed_out", "loop_index")
     FUNCTION = "load_images"
     OUTPUT_NODE = True
 
@@ -149,13 +149,20 @@ class BatchLoadImages:
         if max_images and max_images > 0:
             entries = entries[:max_images]
 
+        total_entries = len(entries)
+        loop_index = 0
+
         if mode == "single":
             # 根据 shuffle/seed/allow_duplicate 解析实际索引
-            effective_index = self._resolve_index(len(entries), index, shuffle, allow_duplicate, effective_seed)
+            effective_index = self._resolve_index(total_entries, index, shuffle, allow_duplicate, effective_seed)
             if effective_index < 0:
                 effective_index = 0
-            if effective_index >= len(entries):
-                effective_index = len(entries) - 1
+            if effective_index >= total_entries:
+                effective_index = total_entries - 1
+            # 计算循环索引：当 allow_duplicate=True 时，index 可以超过 total_entries
+            # loop_index 表示当前是第几轮循环（从0开始）
+            if total_entries > 0 and allow_duplicate:
+                loop_index = index // total_entries
             entries = [entries[effective_index]]
 
         if len(entries) == 0:
@@ -213,7 +220,7 @@ class BatchLoadImages:
             raise ValueError("No valid images found")
 
         output_image = torch.cat(output_images, dim=0)
-        return (output_image, "\n".join(output_names), "\n".join(output_paths), effective_seed)
+        return (output_image, "\n".join(output_names), "\n".join(output_paths), effective_seed, loop_index)
 
     @staticmethod
     def _resolve_index(total: int, index: int, shuffle: bool,
@@ -223,25 +230,24 @@ class BatchLoadImages:
             return 0
         if index < 0:
             index = 0
-        if index >= total:
-            index = total - 1
 
         if not shuffle:
-            return index
+            if allow_duplicate:
+                return index % total
+            else:
+                if index >= total:
+                    index = total - 1
+                return index
 
         import random
-        # 使用 seed 决定随机状态；seed == -1 时回退到固定偏移
         if seed >= 0:
             rng = random.Random(seed)
         else:
-            # 无明确种子时，用 index 做一个确定性偏移，保证同一 index 结果稳定
             rng = random.Random(index)
 
         if allow_duplicate:
-            # 允许重复：纯随机选一个
             return rng.randint(0, total - 1)
         else:
-            # 不允许重复：生成一个打乱序列，取第 index 个
             indices = list(range(total))
             rng.shuffle(indices)
             return indices[index % total]
@@ -294,8 +300,9 @@ class BatchLoadImages:
         if mode == "single":
             if len(entries) == 0:
                 return "image_list is empty"
-            # shuffle=False 且 seed<0 时才校验 index 范围
-            if not shuffle and seed < 0:
+            # 当 allow_duplicate=True 时，index 可以超过 total，用于循环入队
+            # 所以只在 shuffle=False 且 allow_duplicate=False 时检查范围
+            if not shuffle and not allow_duplicate:
                 if index < 0:
                     return "index must be >= 0"
                 if index >= len(entries):

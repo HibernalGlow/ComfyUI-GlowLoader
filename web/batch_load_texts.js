@@ -209,7 +209,7 @@ async function generateSequenceForNode(targetNode, stepCount) {
 
     if (sourceMode === "files") {
         return Array.from({ length: stepCount }, (_, i) =>
-            shuffle ? Math.floor(Math.random() * total) : i % total
+            shuffle ? Math.floor(Math.random() * total) : i
         );
     }
     return generateSequenceFallback(total, stepCount, shuffle, allowDuplicate, seed);
@@ -265,7 +265,7 @@ async function queueAllSequential(node) {
         if (sourceMode === "files") {
             const count = queueCount > 0 ? queueCount : texts.length;
             sequence = Array.from({ length: count }, (_, i) =>
-                shuffle ? Math.floor(Math.random() * texts.length) : i % texts.length
+                shuffle ? Math.floor(Math.random() * texts.length) : i
             );
         } else {
             sequence = generateSequenceFallback(texts.length, queueCount, shuffle, allowDuplicate, seed);
@@ -432,7 +432,7 @@ function generateSequenceFallback(totalEntries, queueCount, shuffle, allowDuplic
         }
     } else {
         if (allowDuplicate) {
-            return Array.from({ length: count }, (_, i) => i % totalEntries);
+            return Array.from({ length: count }, (_, i) => i);
         } else {
             return indices.slice(0, Math.min(count, totalEntries));
         }
@@ -472,7 +472,7 @@ async function queueAllShuffled(node) {
         if (sourceMode === "files") {
             const count = queueCount > 0 ? queueCount : texts.length;
             sequence = Array.from({ length: count }, (_, i) =>
-                shuffle ? Math.floor(Math.random() * texts.length) : i % texts.length
+                shuffle ? Math.floor(Math.random() * texts.length) : i
             );
         } else {
             sequence = generateSequenceFallback(texts.length, queueCount, shuffle, allowDuplicate, seed);

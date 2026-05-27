@@ -287,7 +287,8 @@ async function queueAllSequential(node) {
                 if (!apiNode) continue;
                 apiNode.inputs = apiNode.inputs || {};
                 apiNode.inputs.mode = "single";
-                apiNode.inputs.index = i % names.length;
+                apiNode.inputs.index = i;
+                apiNode.inputs.allow_duplicate = true;
                 await QueueManager.enqueuePrompt(prompt);
             }
             return;
@@ -327,7 +328,7 @@ async function queueAllSequential(node) {
                     const ok = await waitForQueueSpace(node, 1);
                     if (!ok) break;
                 }
-                wIndex.value = i % names.length;
+                wIndex.value = i;
                 wIndex.callback?.(wIndex.value);
                 QueueManager.invalidatePromptCache();
                 await queueCurrent(node);

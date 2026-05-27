@@ -81,8 +81,8 @@ class BatchLoadTexts:
 
     CATEGORY = "ComfyUI-GlowLoader"
 
-    RETURN_TYPES = ("STRING", "STRING", "INT", "INT", "STRING")
-    RETURN_NAMES = ("text", "all_texts", "current_index", "seed_out", "filename")
+    RETURN_TYPES = ("STRING", "STRING", "INT", "INT", "STRING", "INT")
+    RETURN_NAMES = ("text", "all_texts", "current_index", "seed_out", "filename", "loop_index")
     FUNCTION = "load_texts"
 
     def load_texts(self, source_mode: str, text_list: str, file_mode: str,
@@ -120,6 +120,7 @@ class BatchLoadTexts:
             filenames = filenames[:max_texts]
 
         total = len(entries)
+        loop_index = 0
 
         # 确定实际使用的种子：seed==-1 时生成随机种子
         effective_seed = seed if seed >= 0 else random.randint(0, 2147483647)
@@ -129,15 +130,19 @@ class BatchLoadTexts:
             effective_index = self._resolve_index(
                 total, index, shuffle, allow_duplicate, effective_seed
             )
+            # 计算循环索引：当 allow_duplicate=True 时，index 可以超过 total
+            # loop_index 表示当前是第几轮循环（从0开始）
+            if total > 0 and allow_duplicate:
+                loop_index = index // total
             current_filename = filenames[effective_index] if effective_index < len(filenames) else ""
-            return (entries[effective_index], "\n".join(entries), effective_index, effective_seed, current_filename)
+            return (entries[effective_index], "\n".join(entries), effective_index, effective_seed, current_filename, loop_index)
 
         # batch mode: 同样支持 shuffle，返回按规则计算的第一个
         effective_index = self._resolve_index(
             total, 0, shuffle, allow_duplicate, effective_seed
         )
         current_filename = filenames[effective_index] if effective_index < len(filenames) else ""
-        return (entries[effective_index], "\n".join(entries), effective_index, effective_seed, current_filename)
+        return (entries[effective_index], "\n".join(entries), effective_index, effective_seed, current_filename, loop_index)
 
     @staticmethod
     def _resolve_index(total: int, index: int, shuffle: bool,
@@ -147,24 +152,23 @@ class BatchLoadTexts:
             return 0
         if index < 0:
             index = 0
-        if index >= total:
-            index = total - 1
 
         if not shuffle:
-            return index
+            if allow_duplicate:
+                return index % total
+            else:
+                if index >= total:
+                    index = total - 1
+                return index
 
-        # 使用 seed 决定随机状态；seed == -1 时回退到固定偏移
         if seed >= 0:
             rng = random.Random(seed)
         else:
-            # 无明确种子时，用 index 做一个确定性偏移，保证同一 index 结果稳定
             rng = random.Random(index)
 
         if allow_duplicate:
-            # 允许重复：纯随机选一个
             return rng.randint(0, total - 1)
         else:
-            # 不允许重复：生成一个打乱序列，取第 index 个
             indices = list(range(total))
             rng.shuffle(indices)
             return indices[index % total]
@@ -301,8 +305,11 @@ class BatchLoadTexts:
         if mode == "single":
             if index < 0:
                 return "index must be >= 0"
-            if index >= len(entries):
-                return f"index out of range (0..{len(entries)-1})"
+            # 当 allow_duplicate=True 时，index 可以超过 total，用于循环入队
+            # 所以只在 shuffle=False 且 allow_duplicate=False 时检查范围
+            if not shuffle and not allow_duplicate:
+                if index >= len(entries):
+                    return f"index out of range (0..{len(entries)-1})"
 
         return True
 
@@ -354,8 +361,8 @@ class BatchLoadTexts:
         else:
             # 顺序模式
             if allow_duplicate:
-                # 允许重复：循环使用
-                return [i % total_entries for i in range(count)]
+                # 允许重复：循环使用，返回实际索引值以便后端计算 loop_index
+                return list(range(count))
             else:
                 # 不允许重复：只取前count个（不超过总数）
                 return indices[:min(count, total_entries)]
