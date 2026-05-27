@@ -269,6 +269,9 @@ class BatchLoadTexts:
                         seed: int = -1, queue_count: int = 0,
                         shuffle: bool = False, allow_duplicate: bool = True,
                         trigger: bool = True):
+        # 防御 None 值：可选输入未连接时可能传入 None
+        shuffle = True if shuffle else False
+        allow_duplicate = False if allow_duplicate is False else True
         
         # 检查是否有内容
         if source_mode == "direct":

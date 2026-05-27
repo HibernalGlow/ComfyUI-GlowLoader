@@ -292,6 +292,9 @@ class BatchLoadImages:
                         queue_count: int = 0, shuffle: bool = False, allow_duplicate: bool = True,
                         trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
         seed = seed if seed is not None else -1
+        # 防御 None 值：可选输入未连接时可能传入 None
+        shuffle = True if shuffle else False
+        allow_duplicate = False if allow_duplicate is False else True
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
         if max_images and max_images > 0:
