@@ -293,6 +293,7 @@ class BatchLoadImages:
                         trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
         seed = seed if seed is not None else -1
         # 防御 None 值：可选输入未连接时可能传入 None
+        index = 0 if index is None else index
         shuffle = True if shuffle else False
         allow_duplicate = False if allow_duplicate is False else True
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]

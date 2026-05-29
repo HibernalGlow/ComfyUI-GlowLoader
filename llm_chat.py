@@ -265,13 +265,41 @@ def chat_completion(
     else:
         raise ValueError("The client type is not supported.")
 
-    # Call the API with timing
+    # Call the API with timing + interrupt support
     import time
+    import threading
+    import comfy.model_management as mm
+
+    result_holder = {"response": None, "error": None}
     start_time = time.time()
+
+    def _do_call():
+        try:
+            result_holder["response"] = client_info.chat_func(**payload)
+        except Exception as e:
+            result_holder["error"] = e
+
+    t = threading.Thread(target=_do_call, daemon=True)
+    t.start()
+
     try:
-        response = client_info.chat_func(**payload)
-    except Exception as e:
-        raise RuntimeError(f"Error in chat completion: {e}") from e
+        while t.is_alive():
+            t.join(timeout=0.2)
+            if mm.processing_interrupted():
+                if hasattr(client_info.client, "_client") and hasattr(client_info.client._client, "close"):
+                    try:
+                        client_info.client._client.close()
+                    except Exception:
+                        pass
+                raise RuntimeError("LLM request interrupted by user")
+    except RuntimeError:
+        t.join(timeout=1.0)
+        raise
+
+    if result_holder["error"] is not None:
+        raise RuntimeError(f"Error in chat completion: {result_holder['error']}") from result_holder["error"]
+
+    response = result_holder["response"]
     elapsed_time = time.time() - start_time
 
     # Parse the response

@@ -270,6 +270,7 @@ class BatchLoadTexts:
                         shuffle: bool = False, allow_duplicate: bool = True,
                         trigger: bool = True):
         # 防御 None 值：可选输入未连接时可能传入 None
+        index = 0 if index is None else index
         shuffle = True if shuffle else False
         allow_duplicate = False if allow_duplicate is False else True
         
