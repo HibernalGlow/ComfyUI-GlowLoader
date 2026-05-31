@@ -35,6 +35,11 @@ class ClientInfo:
     client_type: Literal["openai", "openai-responses", "ollama", "mistral", "anthropic"]
     chat_func: Callable
     arguments: DetailedArguments
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    proxy: Optional[str] = None
+    model: Optional[str] = None
+    _is_closed: bool = False
 
 
 @dataclass
@@ -110,7 +115,49 @@ def init_client(client_type, base_url, api_key, model, proxy=None) -> ClientInfo
         client_type=client_type,
         chat_func=chat_func,
         arguments=arguments,
+        base_url=base_url,
+        api_key=api_key,
+        proxy=proxy,
+        model=model,
+        _is_closed=False,
     )
+
+
+def _reinit_client(client_info: ClientInfo) -> ClientInfo:
+    if client_info.client_type in ["openai", "openai-responses"]:
+        import httpx
+        timeout = httpx.Timeout(120.0, connect=30.0)
+        http_client = httpx.Client(proxy=client_info.proxy, timeout=timeout) if client_info.proxy else None
+        base_client = OpenAI(base_url=client_info.base_url, api_key=client_info.api_key, http_client=http_client)
+    elif client_info.client_type == "ollama":
+        from ollama import Client as Ollama
+        base_client = Ollama()
+    elif client_info.client_type == "mistral":
+        from mistralai.client import Mistral
+        base_client = Mistral(api_key=client_info.api_key)
+    elif client_info.client_type == "anthropic":
+        from anthropic import Anthropic
+        base_client = Anthropic(base_url=client_info.base_url, api_key=client_info.api_key)
+    else:
+        raise ValueError(f"Unsupported client type: {client_info.client_type}")
+
+    if client_info.client_type == "openai":
+        chat_func = base_client.chat.completions.create
+    elif client_info.client_type == "openai-responses":
+        chat_func = base_client.responses.create
+    elif client_info.client_type == "mistral":
+        chat_func = base_client.chat.complete
+    elif client_info.client_type == "ollama":
+        chat_func = base_client.chat
+    elif client_info.client_type == "anthropic":
+        chat_func = base_client.messages.create
+    else:
+        raise ValueError(f"Unsupported client type: {client_info.client_type}")
+
+    client_info.client = base_client
+    client_info.chat_func = chat_func
+    client_info._is_closed = False
+    return client_info
 
 
 # ─── Chat Completion (Fixed) ────────────────────────────────────
@@ -127,6 +174,10 @@ def chat_completion(
     unload_after_chat: bool = True,
     extra_parameters: Optional[ExtraParameters] = None,
 ) -> str:
+    if client_info._is_closed:
+        Logger.info("Client was closed, reinitializing...")
+        _reinit_client(client_info)
+
     if images is None:
         payload_images: list = []
     elif len(images) > 4:
@@ -289,6 +340,7 @@ def chat_completion(
                 if hasattr(client_info.client, "_client") and hasattr(client_info.client._client, "close"):
                     try:
                         client_info.client._client.close()
+                        client_info._is_closed = True
                     except Exception:
                         pass
                 raise RuntimeError("LLM request interrupted by user")
@@ -434,6 +486,7 @@ class GlowAPIChat:
             },
         }
 
+    OUTPUT_NODE = True
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("response", "elapsed_time")
     FUNCTION = "execute"
@@ -498,6 +551,7 @@ class GlowCaptioner:
             },
         }
 
+    OUTPUT_NODE = True
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("caption", "elapsed_time")
     FUNCTION = "execute"
