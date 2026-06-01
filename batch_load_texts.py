@@ -9,6 +9,20 @@ import folder_paths
 PATH_SEPARATOR = "|"
 
 
+def _normalize_combo(value, options, default):
+    if isinstance(value, str) and value in options:
+        return value
+    if isinstance(value, int) and 0 <= value < len(options):
+        return options[value]
+    try:
+        idx = int(value)
+        if 0 <= idx < len(options):
+            return options[idx]
+    except (ValueError, TypeError):
+        pass
+    return default
+
+
 def _sanitize_relpath(relpath):
     """Sanitize a relative path to prevent path traversal and normalize separators."""
     if not relpath:
@@ -85,12 +99,15 @@ class BatchLoadTexts:
     RETURN_NAMES = ("text", "all_texts", "current_index", "seed_out", "filename", "loop_index")
     FUNCTION = "load_texts"
 
-    def load_texts(self, source_mode: str, text_list: str, file_mode: str,
+    def load_texts(self, source_mode: str, text_list: str, file_mode,
                    max_texts: int, mode: str, index: int,
                    seed=-1, queue_count=0,
                    shuffle: bool = False, allow_duplicate: bool = True,
                    trigger: bool = True,
                    queue_threshold=199, check_interval_ms=1000):
+        file_mode = _normalize_combo(file_mode, ["one_per_file", "lines_per_file"], "one_per_file")
+        source_mode = _normalize_combo(source_mode, ["direct", "files"], "direct")
+        mode = _normalize_combo(mode, ["batch", "single"], "batch")
         # 防御空字符串：前端可能传入空值
         try:
             queue_threshold = int(queue_threshold) if queue_threshold != '' else 199
@@ -178,7 +195,8 @@ class BatchLoadTexts:
         entries_with_names = self._load_from_files_with_names(text_list, file_mode)
         return [e[0] for e in entries_with_names]
 
-    def _load_from_files_with_names(self, text_list: str, file_mode: str):
+    def _load_from_files_with_names(self, text_list: str, file_mode):
+        file_mode = _normalize_combo(file_mode, ["one_per_file", "lines_per_file"], "one_per_file")
         """从文件加载文本，返回 (文本, 文件名) 元组列表"""
         entries = []
         file_entries = [_parse_text_list_entry(x) for x in (text_list or "").splitlines()]
@@ -199,9 +217,8 @@ class BatchLoadTexts:
                 continue
 
             if file_mode == "one_per_file":
-                # 整个文件作为一个 entry（去首尾空白）
-                content = content.strip()
-                if content:
+                # 整个文件作为一个 entry（保留原始空行/首尾空白）
+                if content.strip():
                     entries.append((content, filename))
             else:
                 # 文件内每行作为一个 entry，每行都关联同一个文件名
@@ -372,7 +389,8 @@ class BatchLoadTexts:
                 return indices[:min(count, total_entries)]
 
     @classmethod
-    def _load_entries_for_sequence(cls, text_list: str, file_mode: str):
+    def _load_entries_for_sequence(cls, text_list: str, file_mode):
+        file_mode = _normalize_combo(file_mode, ["one_per_file", "lines_per_file"], "one_per_file")
         """为序列生成加载 entries（类方法版本）"""
         entries = []
         file_entries = [_parse_text_list_entry(x) for x in (text_list or "").splitlines()]
@@ -391,8 +409,7 @@ class BatchLoadTexts:
                 continue
 
             if file_mode == "one_per_file":
-                content = content.strip()
-                if content:
+                if content.strip():
                     entries.append(content)
             else:
                 for line in content.splitlines():

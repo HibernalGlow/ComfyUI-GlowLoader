@@ -1052,7 +1052,7 @@ function createTextListUI(node) {
         const sourceMode = getSourceModeValue(node);
         const fileMode = getFileModeValue(node);
         
-        let modeText = sourceMode === "files" ? "[文件模式]" : "[直接输入]";
+        let modeText = sourceMode === "files" ? "[文件·全文]" : "[直接输入]";
         if (sourceMode === "files" && fileMode === "lines_per_file") modeText = "[文件·逐行]";
         if (shuffle) modeText += "[乱序]";
         if (!allowDup) modeText += "[不重复]";
@@ -1101,8 +1101,15 @@ function createTextListUI(node) {
             const content = document.createElement("div");
             content.textContent = text;
             content.title = text;
-            content.style.cssText =
-                "flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+            
+            const fileMode = getFileModeValue(node);
+            if (sourceMode === "files" && fileMode === "one_per_file") {
+                content.style.cssText =
+                    "flex:1;font-size:12px;white-space:pre-wrap;overflow:hidden;max-height:80px;line-height:1.4;";
+            } else {
+                content.style.cssText =
+                    "flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+            }
 
             // 文件模式下不允许删除展开后的单行条目
             if (sourceMode !== "files") {
@@ -1242,17 +1249,26 @@ app.registerExtension({
                 if (w) {
                     w.type = "hidden";
                     w.computeSize = () => [0, -4];
-                    // 确保INT类型widget有正确的默认值
                     if (name === "queue_count" || name === "max_texts" || name === "seed" || name === "queue_threshold" || name === "check_interval_ms") {
                         if (w.value === "" || w.value === null || w.value === undefined) {
                             w.value = 0;
                         }
-                        // 添加序列化钩子，确保值是数字
                         const origSerialize = w.serializeValue;
                         w.serializeValue = async () => {
                             const v = origSerialize ? await origSerialize() : w.value;
                             const num = parseInt(v, 10);
                             return isNaN(num) ? 0 : num;
+                        };
+                    }
+                    if (name === "source_mode" || name === "file_mode") {
+                        const _w = w;
+                        const origSerialize = w.serializeValue;
+                        w.serializeValue = async () => {
+                            if (origSerialize) {
+                                const v = await origSerialize();
+                                if (typeof v === "string" && v) return v;
+                            }
+                            return String(_w.value || "");
                         };
                     }
                 }
