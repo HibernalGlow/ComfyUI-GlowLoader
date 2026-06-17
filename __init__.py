@@ -20,6 +20,13 @@ except ImportError:
     GlowApplyChatTemplate = None
 
 try:
+    from .workflow_registry import get_registry
+    from .workflow_monitor import BatchWorkflowMonitor
+except ImportError:
+    get_registry = None
+    BatchWorkflowMonitor = None
+
+try:
     from server import PromptServer  # type: ignore
     from aiohttp import web
 except ImportError:
@@ -43,18 +50,22 @@ if PromptServer is not None:
             if source_mode == "direct":
                 entries = [x.strip() for x in (text_list or "").splitlines() if x.strip()]
                 filenames = ["" for _ in entries]
+                source_line_indices = list(range(len(entries)))
             else:
-                entries_with_files = BatchLoadTexts()._load_from_files_with_names(text_list, file_mode)
-                entries = [e[0] for e in entries_with_files]
-                filenames = [e[1] for e in entries_with_files]
+                result = BatchLoadTexts()._load_from_files_with_names_and_indices(text_list, file_mode)
+                entries = [e[0] for e in result]
+                filenames = [e[1] for e in result]
+                source_line_indices = [e[2] for e in result]
 
             if max_texts and max_texts > 0:
                 entries = entries[:max_texts]
                 filenames = filenames[:max_texts]
+                source_line_indices = source_line_indices[:max_texts]
 
             return web.json_response({
                 "entries": entries,
                 "filenames": filenames,
+                "source_line_indices": source_line_indices,
             })
         except Exception as e:
             return web.json_response(
@@ -82,6 +93,72 @@ if PromptServer is not None:
                 {"error": str(e)}, status=500
             )
 
+    if get_registry is not None:
+        @PromptServer.instance.routes.post("/glowloader/wf/register")
+        async def wf_register(request):
+            try:
+                data = await request.json()
+                wf = get_registry().register(
+                    data.get("name", "workflow"),
+                    data.get("total", 0),
+                    data.get("tab_id", ""),
+                )
+                return web.json_response(wf)
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        @PromptServer.instance.routes.post("/glowloader/wf/{wid}/heartbeat")
+        async def wf_heartbeat(request):
+            wid = request.match_info.get("wid")
+            ok = get_registry().heartbeat(wid)
+            return web.json_response({"ok": ok})
+
+        @PromptServer.instance.routes.post("/glowloader/wf/{wid}/prompt")
+        async def wf_prompt(request):
+            wid = request.match_info.get("wid")
+            try:
+                data = await request.json()
+                ok = get_registry().record_prompt(wid, data.get("prompt_id", ""))
+                return web.json_response({"ok": ok})
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        @PromptServer.instance.routes.post("/glowloader/wf/{wid}/executed")
+        async def wf_executed(request):
+            wid = request.match_info.get("wid")
+            try:
+                data = await request.json()
+                ok = get_registry().record_executed(wid, data.get("prompt_id", ""))
+                return web.json_response({"ok": ok})
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        @PromptServer.instance.routes.post("/glowloader/wf/{wid}/done")
+        async def wf_done(request):
+            wid = request.match_info.get("wid")
+            ok = get_registry().mark_done(wid)
+            return web.json_response({"ok": ok})
+
+        @PromptServer.instance.routes.post("/glowloader/wf/{wid}/abort")
+        async def wf_abort(request):
+            wid = request.match_info.get("wid")
+            prompt_ids = get_registry().abort(wid) or []
+            return web.json_response({"prompt_ids": prompt_ids})
+
+        @PromptServer.instance.routes.post("/glowloader/wf/abort_batch")
+        async def wf_abort_batch(request):
+            try:
+                data = await request.json()
+                ids = data.get("ids", [])
+                result = get_registry().abort_batch(ids)
+                return web.json_response(result)
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        @PromptServer.instance.routes.get("/glowloader/wf/status")
+        async def wf_status(request):
+            return web.json_response(get_registry().get_status())
+
 NODE_CLASS_MAPPINGS = {
     "BatchLoadImages": BatchLoadImages,
     "BatchSaveImages": BatchSaveImages,
@@ -94,6 +171,7 @@ NODE_CLASS_MAPPINGS = {
     "GlowCaptioner": GlowCaptioner,
     "GlowGenerateBBOX": GlowGenerateBBOX,
     "GlowApplyChatTemplate": GlowApplyChatTemplate,
+    "BatchWorkflowMonitor": BatchWorkflowMonitor,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -108,6 +186,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "GlowCaptioner": "GlowLoader Captioner",
     "GlowGenerateBBOX": "GlowLoader Generate BBOXes",
     "GlowApplyChatTemplate": "GlowLoader Apply Chat Template",
+    "BatchWorkflowMonitor": "GlowLoader 工作流监控",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]

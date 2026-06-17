@@ -1,6 +1,7 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { QueueManager } from "./queue_manager.js";
+import { Coordinator } from "./workflow_coordinator.js";
 
 function getImageListWidget(node) {
     return node?.widgets?.find((w) => w.name === "image_list");
@@ -251,7 +252,7 @@ async function waitForQueueSpace(node, targetSpace = 1) {
     return QueueManager.waitForSpace(threshold, checkInterval, targetSpace);
 }
 
-async function queueAllSequential(node) {
+async function queueAllSequential(node, report) {
     const names0 = parseImageList(getImageListWidget(node)?.value);
     if (!names0 || names0.length === 0) return;
 
@@ -289,7 +290,8 @@ async function queueAllSequential(node) {
                 apiNode.inputs.mode = "single";
                 apiNode.inputs.index = i;
                 apiNode.inputs.allow_duplicate = true;
-                await QueueManager.enqueuePrompt(prompt);
+                const pid = await QueueManager.enqueuePrompt(prompt);
+                if (report) report(pid);
             }
             return;
         }
@@ -331,7 +333,8 @@ async function queueAllSequential(node) {
                 wIndex.value = i;
                 wIndex.callback?.(wIndex.value);
                 QueueManager.invalidatePromptCache();
-                await queueCurrent(node);
+                const pidSeq = await QueueManager.enqueuePrompt(await QueueManager.getPrompt());
+                if (report) report(pidSeq);
             }
         } finally {
             wMode.value = prevMode;
@@ -366,7 +369,7 @@ function shuffleArray(array) {
     return arr;
 }
 
-async function queueAllShuffled(node) {
+async function queueAllShuffled(node, report) {
     const names0 = parseImageList(getImageListWidget(node)?.value);
     if (!names0 || names0.length === 0) return;
 
@@ -466,7 +469,8 @@ async function queueAllShuffled(node) {
                 wIndex.value = indices[i];
                 wIndex.callback?.(wIndex.value);
                 QueueManager.invalidatePromptCache();
-                await queueCurrent(node);
+                const pidShuf = await QueueManager.enqueuePrompt(await QueueManager.getPrompt());
+                if (report) report(pidShuf);
             }
         } finally {
             wMode.value = prevMode;
@@ -489,6 +493,25 @@ async function queueAllShuffled(node) {
     } finally {
         QueueManager.endQueuing();
     }
+}
+
+async function runQueueWorkflow(node, shuffle) {
+    const names0 = parseImageList(getImageListWidget(node)?.value);
+    if (!names0 || names0.length === 0) return;
+    const maxImages = getMaxImagesValue(node);
+    const names = maxImages && maxImages > 0 ? names0.slice(0, maxImages) : names0;
+    const queueCount = getQueueCountValue(node);
+    const total = queueCount > 0 ? queueCount : names.length;
+    if (total <= 0) return;
+
+    const name = `Images#${node.id} (${total})`;
+    await Coordinator.runWorkflow(name, total, async ({ report }) => {
+        if (shuffle) {
+            await queueAllShuffled(node, report);
+        } else {
+            await queueAllSequential(node, report);
+        }
+    });
 }
 
 function getViewUrl(filename) {
@@ -772,7 +795,7 @@ function createBrowserUI(node) {
     stopBtn.style.cssText =
         "padding:8px;background:rgba(200,50,50,0.8);color:#fff;border:1px solid rgba(200,50,50,0.9);border-radius:4px;cursor:pointer;font-size:13px;";
     stopBtn.onclick = () => {
-        QueueManager.stop();
+        Coordinator.requestLocalStop();
     };
 
     btnRow.appendChild(replaceBtn);
@@ -1022,10 +1045,10 @@ function createBrowserUI(node) {
         openFolderSelect(node, { replace: true });
     };
     queueBtn.onclick = async () => {
-        await queueAllSequential(node);
+        await runQueueWorkflow(node, false);
     };
     queueShuffleBtn.onclick = async () => {
-        await queueAllShuffled(node);
+        await runQueueWorkflow(node, true);
     };
     queueOneBtn.onclick = async () => {
         const wMode = getWidgetByName(node, "mode");

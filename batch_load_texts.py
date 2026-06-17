@@ -229,6 +229,42 @@ class BatchLoadTexts:
 
         return entries
 
+    def _load_from_files_with_names_and_indices(self, text_list: str, file_mode):
+        """从文件加载文本，返回 (文本, 文件名, 源行索引) 元组列表。
+        源行索引是 text_list 中对应文件的行号（从 0 开始）。
+        """
+        file_mode = _normalize_combo(file_mode, ["one_per_file", "lines_per_file"], "one_per_file")
+        entries = []
+        lines = (text_list or "").splitlines()
+
+        for line_idx, raw_line in enumerate(lines):
+            comfy_name, original_relpath = _parse_text_list_entry(raw_line)
+            if not comfy_name:
+                continue
+
+            if not folder_paths.exists_annotated_filepath(comfy_name):
+                continue
+
+            file_path = folder_paths.get_annotated_filepath(comfy_name)
+            filename = os.path.splitext(os.path.basename(file_path))[0]
+
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            if file_mode == "one_per_file":
+                if content.strip():
+                    entries.append((content, filename, line_idx))
+            else:
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line:
+                        entries.append((line, filename, line_idx))
+
+        return entries
+
     @classmethod
     def IS_CHANGED(s, source_mode: str, text_list: str, file_mode: str,
                    max_texts: int, mode: str, index: int,
