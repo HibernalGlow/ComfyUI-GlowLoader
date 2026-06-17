@@ -1,7 +1,6 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { QueueManager } from "./queue_manager.js";
-import { Coordinator } from "./workflow_coordinator.js";
 
 function getTextListWidget(node) {
     return node?.widgets?.find((w) => w.name === "text_list");
@@ -243,7 +242,7 @@ async function collectSyncNodeStates(excludeNode, stepCount) {
     return states;
 }
 
-async function queueAllSequential(node, report) {
+async function queueAllSequential(node) {
     const sourceMode = getSourceModeValue(node);
     const texts0 = parseTextList(getTextListWidget(node)?.value);
     if (!texts0 || texts0.length === 0) return;
@@ -357,12 +356,10 @@ async function queueAllSequential(node, report) {
                             }
                         }
                     }
-                    const pid = await QueueManager.enqueuePrompt(prompt);
-                    if (report) report(pid);
+                    await QueueManager.enqueuePrompt(prompt);
                     continue;
                 }
-                const pidCur = await QueueManager.enqueuePrompt(await QueueManager.getPrompt());
-                if (report) report(pidCur);
+                await queueCurrent(node);
             }
         } finally {
             if (wMode) {
@@ -452,7 +449,7 @@ function shuffleArraySimple(array) {
     return arr;
 }
 
-async function queueAllShuffled(node, report) {
+async function queueAllShuffled(node) {
     const sourceMode = getSourceModeValue(node);
     const texts0 = parseTextList(getTextListWidget(node)?.value);
     if (!texts0 || texts0.length === 0) return;
@@ -569,12 +566,10 @@ async function queueAllShuffled(node, report) {
                             }
                         }
                     }
-                    const pid = await QueueManager.enqueuePrompt(prompt);
-                    if (report) report(pid);
+                    await QueueManager.enqueuePrompt(prompt);
                     continue;
                 }
-                const pidCur = await QueueManager.enqueuePrompt(await QueueManager.getPrompt());
-                if (report) report(pidCur);
+                await queueCurrent(node);
             }
         } finally {
             if (wMode) {
@@ -602,25 +597,6 @@ async function queueAllShuffled(node, report) {
     } finally {
         QueueManager.endQueuing();
     }
-}
-
-async function runQueueWorkflow(node, shuffle) {
-    const texts0 = parseTextList(getTextListWidget(node)?.value);
-    if (!texts0 || texts0.length === 0) return;
-    const maxTexts = getMaxTextsValue(node);
-    const texts = maxTexts && maxTexts > 0 ? texts0.slice(0, maxTexts) : texts0;
-    const queueCount = getQueueCountValue(node);
-    const total = queueCount > 0 ? queueCount : texts.length;
-    if (total <= 0) return;
-
-    const name = `Texts#${node.id} (${total})`;
-    await Coordinator.runWorkflow(name, total, async ({ report }) => {
-        if (shuffle) {
-            await queueAllShuffled(node, report);
-        } else {
-            await queueAllSequential(node, report);
-        }
-    });
 }
 
 // 上传单个文件
@@ -974,15 +950,15 @@ function createTextListUI(node) {
     stopBtn.style.cssText =
         "padding:8px;background:rgba(200,50,50,0.8);color:#fff;border:1px solid rgba(200,50,50,0.9);border-radius:4px;cursor:pointer;font-size:13px;";
     stopBtn.onclick = () => {
-        Coordinator.requestLocalStop();
+        QueueManager.stop();
     };
-
+    
     queueBtn.onclick = async () => {
-        await runQueueWorkflow(node, false);
+        await queueAllSequential(node);
     };
 
     queueShuffleBtn.onclick = async () => {
-        await runQueueWorkflow(node, true);
+        await queueAllShuffled(node);
     };
     
     queueOneBtn.onclick = async () => {
@@ -999,7 +975,6 @@ function createTextListUI(node) {
             setTextList(node, []);
             selectedIndex = -1;
             expandedEntries = null;
-            sourceLineIndices = null;
             redraw();
         }
     };
@@ -1020,7 +995,6 @@ function createTextListUI(node) {
     let selectedIndex = -1;
     // 缓存展开后的条目（文件模式下从后端获取）
     let expandedEntries = null; // null 表示未加载，数组表示展开结果
-    let sourceLineIndices = null; // 每个展开条目对应的 text_list 源行索引
     let expandVersion = 0; // 用于取消过期的异步请求
 
     // 从后端获取展开后的条目
@@ -1028,7 +1002,6 @@ function createTextListUI(node) {
         const sourceMode = getSourceModeValue(node);
         if (sourceMode !== "files") {
             expandedEntries = null;
-            sourceLineIndices = null;
             return;
         }
         const textList = getTextListWidget(node)?.value || "";
@@ -1053,11 +1026,9 @@ function createTextListUI(node) {
             const json = await resp.json();
             console.log(`[BatchLoadTexts] fetchExpandedEntries - 返回 ${json.entries?.length || 0} 个条目`);
             expandedEntries = json.entries || [];
-            sourceLineIndices = json.source_line_indices || null;
         } catch (e) {
             console.warn("[BatchLoadTexts] 获取展开条目失败:", e);
             expandedEntries = null;
-            sourceLineIndices = null;
         }
     };
 
@@ -1140,32 +1111,16 @@ function createTextListUI(node) {
                     "flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
             }
 
-            // 删除按钮
-            const del = document.createElement("button");
-            del.textContent = "×";
-            del.title = sourceMode === "files" ? "删除该文件" : "删除";
-            del.style.cssText =
-                "width:20px;height:20px;background:rgba(255,0,0,0.75);color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:16px;line-height:1;";
-            del.onclick = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (sourceMode === "files") {
-                    // 文件模式：删除对应的源文件行
-                    if (sourceLineIndices && idx < sourceLineIndices.length) {
-                        const srcLineIdx = sourceLineIndices[idx];
-                        const textListWidget = getTextListWidget(node);
-                        const rawLines = (textListWidget?.value || "").split("\n");
-                        if (srcLineIdx >= 0 && srcLineIdx < rawLines.length) {
-                            rawLines.splice(srcLineIdx, 1);
-                            const w = getTextListWidget(node);
-                            if (w) w.value = rawLines.join("\n");
-                            selectedIndex = -1;
-                            asyncRedraw();
-                            return;
-                        }
-                    }
-                } else {
-                    // 直接输入模式：删除当前行
+            // 文件模式下不允许删除展开后的单行条目
+            if (sourceMode !== "files") {
+                const del = document.createElement("button");
+                del.textContent = "×";
+                del.title = "删除";
+                del.style.cssText =
+                    "width:20px;height:20px;background:rgba(255,0,0,0.75);color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:16px;line-height:1;";
+                del.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
                     const next = entries.slice(0, idx).concat(entries.slice(idx + 1));
                     setTextList(node, next);
                     if (selectedIndex === idx) {
@@ -1174,9 +1129,9 @@ function createTextListUI(node) {
                         selectedIndex--;
                     }
                     redraw();
-                }
-            };
-            item.appendChild(del);
+                };
+                item.appendChild(del);
+            }
 
             item.onclick = () => {
                 selectedIndex = idx;
@@ -1216,7 +1171,6 @@ function createTextListUI(node) {
             fileBtnRow.style.display = "none";
             directBtnRow.style.display = "flex";
             expandedEntries = null;
-            sourceLineIndices = null;
             redraw();
         }
     };

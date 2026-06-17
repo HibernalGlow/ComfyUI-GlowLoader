@@ -1,7 +1,6 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { QueueManager } from "./queue_manager.js";
-import { Coordinator } from "./workflow_coordinator.js";
 
 function getImageListWidget(node) {
     return node?.widgets?.find((w) => w.name === "image_list");
@@ -252,7 +251,7 @@ async function waitForQueueSpace(node, targetSpace = 1) {
     return QueueManager.waitForSpace(threshold, checkInterval, targetSpace);
 }
 
-async function queueAllSequential(node, report) {
+async function queueAllSequential(node) {
     const names0 = parseImageList(getImageListWidget(node)?.value);
     if (!names0 || names0.length === 0) return;
 
@@ -290,8 +289,7 @@ async function queueAllSequential(node, report) {
                 apiNode.inputs.mode = "single";
                 apiNode.inputs.index = i;
                 apiNode.inputs.allow_duplicate = true;
-                const pid = await QueueManager.enqueuePrompt(prompt);
-                if (report) report(pid);
+                await QueueManager.enqueuePrompt(prompt);
             }
             return;
         }
@@ -333,8 +331,7 @@ async function queueAllSequential(node, report) {
                 wIndex.value = i;
                 wIndex.callback?.(wIndex.value);
                 QueueManager.invalidatePromptCache();
-                const pidSeq = await QueueManager.enqueuePrompt(await QueueManager.getPrompt());
-                if (report) report(pidSeq);
+                await queueCurrent(node);
             }
         } finally {
             wMode.value = prevMode;
@@ -369,7 +366,7 @@ function shuffleArray(array) {
     return arr;
 }
 
-async function queueAllShuffled(node, report) {
+async function queueAllShuffled(node) {
     const names0 = parseImageList(getImageListWidget(node)?.value);
     if (!names0 || names0.length === 0) return;
 
@@ -469,8 +466,7 @@ async function queueAllShuffled(node, report) {
                 wIndex.value = indices[i];
                 wIndex.callback?.(wIndex.value);
                 QueueManager.invalidatePromptCache();
-                const pidShuf = await QueueManager.enqueuePrompt(await QueueManager.getPrompt());
-                if (report) report(pidShuf);
+                await queueCurrent(node);
             }
         } finally {
             wMode.value = prevMode;
@@ -493,25 +489,6 @@ async function queueAllShuffled(node, report) {
     } finally {
         QueueManager.endQueuing();
     }
-}
-
-async function runQueueWorkflow(node, shuffle) {
-    const names0 = parseImageList(getImageListWidget(node)?.value);
-    if (!names0 || names0.length === 0) return;
-    const maxImages = getMaxImagesValue(node);
-    const names = maxImages && maxImages > 0 ? names0.slice(0, maxImages) : names0;
-    const queueCount = getQueueCountValue(node);
-    const total = queueCount > 0 ? queueCount : names.length;
-    if (total <= 0) return;
-
-    const name = `Images#${node.id} (${total})`;
-    await Coordinator.runWorkflow(name, total, async ({ report }) => {
-        if (shuffle) {
-            await queueAllShuffled(node, report);
-        } else {
-            await queueAllSequential(node, report);
-        }
-    });
 }
 
 function getViewUrl(filename) {
@@ -795,7 +772,7 @@ function createBrowserUI(node) {
     stopBtn.style.cssText =
         "padding:8px;background:rgba(200,50,50,0.8);color:#fff;border:1px solid rgba(200,50,50,0.9);border-radius:4px;cursor:pointer;font-size:13px;";
     stopBtn.onclick = () => {
-        Coordinator.requestLocalStop();
+        QueueManager.stop();
     };
 
     btnRow.appendChild(replaceBtn);
@@ -1045,10 +1022,10 @@ function createBrowserUI(node) {
         openFolderSelect(node, { replace: true });
     };
     queueBtn.onclick = async () => {
-        await runQueueWorkflow(node, false);
+        await queueAllSequential(node);
     };
     queueShuffleBtn.onclick = async () => {
-        await runQueueWorkflow(node, true);
+        await queueAllShuffled(node);
     };
     queueOneBtn.onclick = async () => {
         const wMode = getWidgetByName(node, "mode");

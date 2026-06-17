@@ -68,13 +68,7 @@ const QueueManager = {
     },
 
     async enqueuePrompt(prompt) {
-        const resp = await api.queuePrompt(0, prompt);
-        try {
-            const json = await resp.json();
-            return json?.prompt_id || null;
-        } catch (e) {
-            return null;
-        }
+        await api.queuePrompt(0, prompt);
     },
 
     deepClone(obj) {
