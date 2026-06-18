@@ -5,6 +5,7 @@ const HIDDEN_WIDGET_HEIGHT = -4;
 const COMPACT_TEXT_HEIGHT = 26;
 const COMPACT_ROW_HEIGHT = 16;
 const COMPACT_ROW_GAP = 2;
+const RESIZE_GUARD_INTERVAL_MS = 150;
 
 function getWidget(node, name) {
     return node?.widgets?.find((widget) => widget.name === name);
@@ -161,6 +162,9 @@ function estimateCompactHeight(node) {
             (total, widget) => total + getCompactWidgetHeight(widget, width) + COMPACT_ROW_GAP,
             0
         );
+    if (layoutBottom > widgetHeight + 80) {
+        layoutBottom = 0;
+    }
     const slotRows = Math.max(node.inputs?.length || 0, node.outputs?.length || 0);
     const slotHeight = 24 + slotRows * 16;
     return Math.ceil(Math.max(layoutBottom || widgetHeight, widgetHeight, slotHeight, 140) + 8);
@@ -174,20 +178,40 @@ function installCompactSizing(node) {
         const width = Math.max(this.size?.[0] || 420, 420);
         return [width, estimateCompactHeight(this)];
     };
+
+    const originalOnResize = node.onResize;
+    node.onResize = function () {
+        const result = originalOnResize?.apply(this, arguments);
+        if (!this._glowTriggerLoraResizing) scheduleSizeGuard(this);
+        return result;
+    };
+
+    const originalOnDrawForeground = node.onDrawForeground;
+    node.onDrawForeground = function () {
+        const result = originalOnDrawForeground?.apply(this, arguments);
+        scheduleSizeGuard(this);
+        return result;
+    };
 }
 
 function resizeNode(node) {
     const width = Math.max(node.size?.[0] || 420, 420);
     if (node.size) node.size[1] = 0;
     const height = estimateCompactHeight(node);
-    node.size = [width, height];
-    node.setSize?.([width, height]);
-    node.size[0] = width;
-    node.size[1] = height;
-    node.onResize?.([width, height]);
-    patchNodeCSSSize(node);
-    notifyVue(node);
-    node.setDirtyCanvas?.(true, true);
+    node._glowTriggerLoraResizing = true;
+    try {
+        node.size = [width, height];
+        node.setSize?.([width, height]);
+        node.size[0] = width;
+        node.size[1] = height;
+        node.onResize?.([width, height]);
+        patchNodeCSSSize(node);
+        notifyVue(node);
+        node.setDirtyCanvas?.(true, true);
+        node._glowTriggerLoraLastResize = performance.now?.() ?? Date.now();
+    } finally {
+        node._glowTriggerLoraResizing = false;
+    }
 }
 
 function scheduleResize(node) {
@@ -198,6 +222,50 @@ function scheduleResize(node) {
     }
     setTimeout(() => resizeNode(node), 50);
     setTimeout(() => resizeNode(node), 200);
+}
+
+function enforceCompactSize(node) {
+    if (!node || node.flags?.collapsed) return;
+    const now = performance.now?.() ?? Date.now();
+    if (now - (node._glowTriggerLoraLastGuard || 0) < RESIZE_GUARD_INTERVAL_MS) return;
+    node._glowTriggerLoraLastGuard = now;
+
+    compactInputTextWidget(node);
+    const width = Math.max(node.size?.[0] || 420, 420);
+    const height = estimateCompactHeight(node);
+    const currentHeight = Number(node.size?.[1] || 0);
+    if (Math.abs(currentHeight - height) <= 2) {
+        patchNodeCSSSize(node);
+        return;
+    }
+
+    node._glowTriggerLoraResizing = true;
+    try {
+        node.size = [width, height];
+        node.setSize?.([width, height]);
+        node.size[0] = width;
+        node.size[1] = height;
+        patchNodeCSSSize(node);
+        notifyVue(node);
+        node.setDirtyCanvas?.(true, true);
+        node._glowTriggerLoraLastResize = now;
+    } finally {
+        node._glowTriggerLoraResizing = false;
+    }
+}
+
+function scheduleSizeGuard(node) {
+    if (node._glowTriggerLoraGuardQueued) return;
+    node._glowTriggerLoraGuardQueued = true;
+    const run = () => {
+        node._glowTriggerLoraGuardQueued = false;
+        enforceCompactSize(node);
+    };
+    if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(run);
+    } else {
+        setTimeout(run, 0);
+    }
 }
 
 function updateVisibleGroups(node) {

@@ -5,6 +5,7 @@ const MAX_DYNAMIC_OUTPUTS = 30;
 const HIDDEN_WIDGET_HEIGHT = -4;
 const MIN_NODE_WIDTH = 360;
 const DEFAULTABLE_TYPES = new Set(["STRING", "INT", "FLOAT", "BOOLEAN", "COMBO"]);
+const RESIZE_GUARD_INTERVAL_MS = 150;
 
 function getWidget(node, name) {
     return node?.widgets?.find((widget) => widget.name === name);
@@ -17,8 +18,9 @@ function clampCount(value) {
 }
 
 function normalizeType(type, customType = "") {
-    const normalized = String(type || "*").trim().toUpperCase();
-    if (!normalized || normalized === "ANY") return "*";
+    const normalized = String(type || "FLOAT").trim().toUpperCase();
+    if (!normalized) return "FLOAT";
+    if (normalized === "ANY") return "*";
     if (normalized === "CUSTOM") {
         const custom = String(customType || "").trim().toUpperCase();
         return custom || "*";
@@ -33,7 +35,21 @@ function selectedType(node, index) {
 }
 
 function selectedTypeRaw(node, index) {
-    return String(getWidget(node, `type_${index}`)?.value || "*").trim().toUpperCase();
+    return String(getWidget(node, `type_${index}`)?.value || "FLOAT").trim().toUpperCase();
+}
+
+function selectedIndex(node) {
+    const value = getWidget(node, "index")?.value ?? 1;
+    return clampCount(value);
+}
+
+function selectedCount(node) {
+    const value = getWidget(node, "output_count")?.value ?? node.properties?.outputCount ?? 4;
+    return clampCount(value);
+}
+
+function displayType(type) {
+    return type === "*" ? "ANY" : type;
 }
 
 function setWidgetVisible(widget, visible) {
@@ -94,17 +110,37 @@ function installSizing(node) {
         const width = Math.max(this.size?.[0] || MIN_NODE_WIDTH, MIN_NODE_WIDTH);
         return [width, estimateHeight(this)];
     };
+
+    const originalOnResize = node.onResize;
+    node.onResize = function () {
+        const result = originalOnResize?.apply(this, arguments);
+        if (!this._glowDynamicResizing) scheduleSizeGuard(this);
+        return result;
+    };
+
+    const originalOnDrawForeground = node.onDrawForeground;
+    node.onDrawForeground = function () {
+        const result = originalOnDrawForeground?.apply(this, arguments);
+        scheduleSizeGuard(this);
+        return result;
+    };
 }
 
 function resizeNode(node) {
     const width = Math.max(node.size?.[0] || MIN_NODE_WIDTH, MIN_NODE_WIDTH);
     const height = estimateHeight(node);
-    node.size = [width, height];
-    node.setSize?.([width, height]);
-    node.onResize?.([width, height]);
-    patchNodeCSSSize(node);
-    notifyVue(node);
-    node.setDirtyCanvas?.(true, true);
+    node._glowDynamicResizing = true;
+    try {
+        node.size = [width, height];
+        node.setSize?.([width, height]);
+        node.onResize?.([width, height]);
+        patchNodeCSSSize(node);
+        notifyVue(node);
+        node.setDirtyCanvas?.(true, true);
+        node._glowDynamicLastResize = performance.now?.() ?? Date.now();
+    } finally {
+        node._glowDynamicResizing = false;
+    }
 }
 
 function scheduleResize(node) {
@@ -114,6 +150,47 @@ function scheduleResize(node) {
         requestAnimationFrame(() => requestAnimationFrame(() => resizeNode(node)));
     }
     setTimeout(() => resizeNode(node), 50);
+}
+
+function enforceCompactSize(node) {
+    if (!node || node.flags?.collapsed) return;
+    const now = performance.now?.() ?? Date.now();
+    if (now - (node._glowDynamicLastGuard || 0) < RESIZE_GUARD_INTERVAL_MS) return;
+    node._glowDynamicLastGuard = now;
+
+    const width = Math.max(node.size?.[0] || MIN_NODE_WIDTH, MIN_NODE_WIDTH);
+    const height = estimateHeight(node);
+    const currentHeight = Number(node.size?.[1] || 0);
+    if (Math.abs(currentHeight - height) <= 2) {
+        patchNodeCSSSize(node);
+        return;
+    }
+
+    node._glowDynamicResizing = true;
+    try {
+        node.size = [width, height];
+        node.setSize?.([width, height]);
+        patchNodeCSSSize(node);
+        notifyVue(node);
+        node.setDirtyCanvas?.(true, true);
+        node._glowDynamicLastResize = now;
+    } finally {
+        node._glowDynamicResizing = false;
+    }
+}
+
+function scheduleSizeGuard(node) {
+    if (node._glowDynamicGuardQueued) return;
+    node._glowDynamicGuardQueued = true;
+    const run = () => {
+        node._glowDynamicGuardQueued = false;
+        enforceCompactSize(node);
+    };
+    if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(run);
+    } else {
+        setTimeout(run, 0);
+    }
 }
 
 function getInputIndex(node, name) {
@@ -155,24 +232,41 @@ function ensureOutputCount(node, count) {
 
 function syncSlotTypes(node, count) {
     removeInactiveInputs(node, count);
-    ensureOutputCount(node, count);
+    ensureOutputCount(node, count + 1);
 
     for (let index = 1; index <= count; index += 1) {
         const type = selectedType(node, index);
-        const label = type === "*" ? "*" : type;
-        ensureInput(node, `input_${index}`, type, `${index}`);
+        const label = `${index} ${displayType(type)}`;
+        ensureInput(node, `input_${index}`, type, label);
 
         const output = node.outputs[index - 1];
         if (!output) continue;
-        output.name = `out_${index}`;
+        output.name = label;
         output.type = type;
         output.label = label;
     }
+
+    syncIndexOutput(node, count);
+}
+
+function syncIndexOutput(node, count = selectedCount(node)) {
+    const index = selectedIndex(node);
+    const selectedOutput = node.outputs?.[count];
+    if (selectedOutput) {
+        const type = index <= count ? selectedType(node, index) : "*";
+        const label = `index ${index} ${displayType(type)}`;
+        selectedOutput.name = label;
+        selectedOutput.type = type;
+        selectedOutput.label = label;
+    }
+    node.properties = node.properties || {};
+    node.properties.index = index;
 }
 
 function localizeWidgets(node) {
     const labels = {
         output_count: "输出数量",
+        index: "索引",
     };
     for (let index = 1; index <= MAX_DYNAMIC_OUTPUTS; index += 1) {
         labels[`type_${index}`] = `类型 ${index}`;
@@ -187,6 +281,7 @@ function localizeWidgets(node) {
 function syncProperties(node, count) {
     node.properties = node.properties || {};
     node.properties.outputCount = count;
+    node.properties.index = selectedIndex(node);
     node.properties.outputTypes = [];
     node.properties.customTypes = [];
     for (let index = 1; index <= MAX_DYNAMIC_OUTPUTS; index += 1) {
@@ -214,8 +309,12 @@ function updateNode(node) {
         localizeWidgets(node);
 
         const countWidget = getWidget(node, "output_count");
-        const count = clampCount(countWidget?.value ?? node.properties?.outputCount ?? 4);
+        const count = selectedCount(node);
         if (countWidget && countWidget.value !== count) countWidget.value = count;
+
+        const indexWidget = getWidget(node, "index");
+        const index = clampCount(indexWidget?.value ?? node.properties?.index ?? 1);
+        if (indexWidget && indexWidget.value !== index) indexWidget.value = index;
 
         updateVisibleWidgets(node, count);
         syncSlotTypes(node, count);
@@ -238,8 +337,26 @@ function wrapWidgetCallback(node, widget) {
     };
 }
 
+function wrapIndexCallback(node) {
+    const widget = getWidget(node, "index");
+    if (!widget || widget._glowDynamicCallbackInstalled) return;
+    widget._glowDynamicCallbackInstalled = true;
+    const originalCallback = widget.callback;
+    widget.callback = function () {
+        const result = originalCallback?.apply(this, arguments);
+        const index = selectedIndex(node);
+        if (widget.value !== index) widget.value = index;
+        syncIndexOutput(node);
+        notifyVue(node);
+        node.setDirtyCanvas?.(true, true);
+        app.graph?.setDirtyCanvas(true, true);
+        return result;
+    };
+}
+
 function installCallbacks(node) {
     wrapWidgetCallback(node, getWidget(node, "output_count"));
+    wrapIndexCallback(node);
     for (let index = 1; index <= MAX_DYNAMIC_OUTPUTS; index += 1) {
         wrapWidgetCallback(node, getWidget(node, `type_${index}`));
         wrapWidgetCallback(node, getWidget(node, `custom_type_${index}`));

@@ -1,7 +1,6 @@
 MAX_DYNAMIC_OUTPUTS = 30
 
 OUTPUT_TYPE_CHOICES = [
-    "*",
     "MODEL",
     "CLIP",
     "VAE",
@@ -91,42 +90,48 @@ class GlowDynamicTypedOutputs:
             "output_count": (
                 "INT",
                 {"default": 4, "min": 1, "max": MAX_DYNAMIC_OUTPUTS, "step": 1},
-            )
+            ),
+            "index": (
+                "INT",
+                {"default": 1, "min": 1, "max": MAX_DYNAMIC_OUTPUTS, "step": 1},
+            ),
         }
         optional = {}
 
         for index in range(1, MAX_DYNAMIC_OUTPUTS + 1):
-            required[f"type_{index}"] = (OUTPUT_TYPE_CHOICES, {"default": "*"})
+            required[f"type_{index}"] = (OUTPUT_TYPE_CHOICES, {"default": "FLOAT"})
             required[f"custom_type_{index}"] = ("STRING", {"default": ""})
             required[f"default_value_{index}"] = ("STRING", {"default": ""})
             optional[f"input_{index}"] = (any_type,)
 
         return {"required": required, "optional": optional}
 
-    RETURN_TYPES = (any_type,) * MAX_DYNAMIC_OUTPUTS
-    RETURN_NAMES = tuple(f"out_{index}" for index in range(1, MAX_DYNAMIC_OUTPUTS + 1))
+    RETURN_TYPES = (any_type,) * (MAX_DYNAMIC_OUTPUTS + 1)
+    RETURN_NAMES = tuple(f"out_{index}" for index in range(1, MAX_DYNAMIC_OUTPUTS + 1)) + ("by_index",)
     FUNCTION = "emit"
     CATEGORY = "ComfyUI-GlowLoader/Utils"
     DESCRIPTION = "Creates a compact set of typed outputs. Connected inputs pass through; primitive defaults are used when unconnected."
 
-    def emit(self, output_count=4, **kwargs):
+    def emit(self, output_count=4, index=1, **kwargs):
         count = _clamp_count(output_count)
         outputs = []
 
-        for index in range(1, MAX_DYNAMIC_OUTPUTS + 1):
-            if index > count:
+        for slot in range(1, MAX_DYNAMIC_OUTPUTS + 1):
+            if slot > count:
                 outputs.append(None)
                 continue
 
-            input_key = f"input_{index}"
+            input_key = f"input_{slot}"
             if input_key in kwargs:
                 outputs.append(kwargs.get(input_key))
                 continue
 
             output_type = _normalize_type(
-                kwargs.get(f"type_{index}", "*"),
-                kwargs.get(f"custom_type_{index}", ""),
+                kwargs.get(f"type_{slot}", "FLOAT"),
+                kwargs.get(f"custom_type_{slot}", ""),
             )
-            outputs.append(_coerce_default_value(output_type, kwargs.get(f"default_value_{index}", "")))
+            outputs.append(_coerce_default_value(output_type, kwargs.get(f"default_value_{slot}", "")))
 
-        return tuple(outputs)
+        selected_index = _clamp_count(index)
+        selected = outputs[selected_index - 1] if selected_index <= count else None
+        return tuple(outputs + [selected])
