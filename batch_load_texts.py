@@ -23,6 +23,22 @@ def _normalize_combo(value, options, default):
     return default
 
 
+def _normalize_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "y", "on"):
+            return True
+        if normalized in ("false", "0", "no", "n", "off", ""):
+            return False
+    return default
+
+
 def _sanitize_relpath(relpath):
     """Sanitize a relative path to prevent path traversal and normalize separators."""
     if not relpath:
@@ -108,6 +124,8 @@ class BatchLoadTexts:
         file_mode = _normalize_combo(file_mode, ["one_per_file", "lines_per_file"], "one_per_file")
         source_mode = _normalize_combo(source_mode, ["direct", "files"], "direct")
         mode = _normalize_combo(mode, ["batch", "single"], "batch")
+        shuffle = _normalize_bool(shuffle, False)
+        allow_duplicate = _normalize_bool(allow_duplicate, True)
         # 防御空字符串：前端可能传入空值
         try:
             queue_threshold = int(queue_threshold) if queue_threshold != '' else 199
@@ -142,22 +160,14 @@ class BatchLoadTexts:
         # 确定实际使用的种子：seed==-1 时生成随机种子
         effective_seed = seed if seed >= 0 else random.randint(0, 2147483647)
 
-        if mode == "single":
-            # 根据 shuffle/seed/allow_duplicate 计算实际输出索引
-            effective_index = self._resolve_index(
-                total, index, shuffle, allow_duplicate, effective_seed
-            )
-            # 计算循环索引：当 allow_duplicate=True 时，index 可以超过 total
-            # loop_index 表示当前是第几轮循环（从0开始）
-            if total > 0 and allow_duplicate:
-                loop_index = index // total
-            current_filename = filenames[effective_index] if effective_index < len(filenames) else ""
-            return (entries[effective_index], "\n".join(entries), effective_index, effective_seed, current_filename, loop_index)
-
-        # batch mode: 同样支持 shuffle，返回按规则计算的第一个
+        # 普通 ComfyUI 执行也必须按 index 指向当前文本；mode 只保留为兼容字段。
         effective_index = self._resolve_index(
-            total, 0, shuffle, allow_duplicate, effective_seed
+            total, index, shuffle, allow_duplicate, effective_seed
         )
+        # 计算循环索引：当 allow_duplicate=True 时，index 可以超过 total
+        # loop_index 表示当前是第几轮循环（从0开始）
+        if total > 0 and allow_duplicate:
+            loop_index = index // total
         current_filename = filenames[effective_index] if effective_index < len(filenames) else ""
         return (entries[effective_index], "\n".join(entries), effective_index, effective_seed, current_filename, loop_index)
 
@@ -243,6 +253,8 @@ class BatchLoadTexts:
                    shuffle: bool = False, allow_duplicate: bool = True,
                    trigger: bool = True):
         m = hashlib.sha256()
+        shuffle = _normalize_bool(shuffle, False)
+        allow_duplicate = _normalize_bool(allow_duplicate, True)
         
         # 计算 entries 用于 hash
         if source_mode == "direct":
@@ -295,8 +307,8 @@ class BatchLoadTexts:
                         trigger: bool = True):
         # 防御 None 值：可选输入未连接时可能传入 None
         index = 0 if index is None else index
-        shuffle = True if shuffle else False
-        allow_duplicate = False if allow_duplicate is False else True
+        shuffle = _normalize_bool(shuffle, False)
+        allow_duplicate = _normalize_bool(allow_duplicate, True)
         
         # 检查是否有内容
         if source_mode == "direct":
@@ -343,6 +355,8 @@ class BatchLoadTexts:
                                 max_texts: int, queue_count: int, shuffle: bool,
                                 allow_duplicate: bool, seed: int, excluded_indices=None):
         """生成入队序列，返回索引列表"""
+        shuffle = _normalize_bool(shuffle, False)
+        allow_duplicate = _normalize_bool(allow_duplicate, True)
 
         # 计算 entries 数量
         if source_mode == "direct":

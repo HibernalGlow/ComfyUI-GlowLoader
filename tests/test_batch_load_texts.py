@@ -21,6 +21,18 @@ class TestBatchLoadTexts:
         assert result[1] == "hello\nworld\ntest"  # all_texts output
         assert result[2] == 0  # current_index
 
+    def test_batch_mode_respects_index(self):
+        """普通 ComfyUI 运行时 batch 模式也要按 index 输出当前文本。"""
+        node = BatchLoadTexts()
+        text_list = "hello\nworld\ntest"
+        result = node.load_texts(
+            "direct", text_list, "one_per_file", 0, "batch", 1,
+            shuffle=False, allow_duplicate=False
+        )
+
+        assert result[0] == "world"
+        assert result[2] == 1
+
     def test_single_mode_direct(self):
         """测试 single 模式 - 直接输入"""
         node = BatchLoadTexts()
@@ -54,6 +66,19 @@ class TestBatchLoadTexts:
         assert result[0] == "only_one"
         assert result[2] == 0
 
+    def test_string_false_booleans_do_not_shuffle(self):
+        """字符串 false 也必须按关闭处理，兼容旧 workflow/前端传值。"""
+        node = BatchLoadTexts()
+        text_list = "line1\nline2\nline3"
+
+        result = node.load_texts(
+            "direct", text_list, "one_per_file", 0, "single", 1,
+            shuffle="false", allow_duplicate="false", seed=123
+        )
+
+        assert result[0] == "line2"
+        assert result[2] == 1
+
 
 class TestGenerateQueueSequence:
     """测试 generate_queue_sequence 方法"""
@@ -75,6 +100,15 @@ class TestGenerateQueueSequence:
         # 应该循环 5 次
         assert len(sequence) == 5
         assert sequence == [0, 1, 0, 1, 0]
+
+    def test_string_false_sequence_is_sequential(self):
+        """字符串 false 不能触发乱序分支。"""
+        text_list = "a\nb\nc"
+        sequence = BatchLoadTexts.generate_queue_sequence(
+            "direct", text_list, "one_per_file", 0, 3, "false", "false", 42
+        )
+
+        assert sequence == [0, 1, 2]
 
     def test_shuffle_no_duplicate(self):
         """测试乱序模式，不重复"""
