@@ -267,7 +267,14 @@ function patchTextPrompt(prompt, node, index, { seedValue, shuffle, allowDuplica
     }
 }
 
-async function updatePrepareStatus(node, label, completed, total) {
+function setWidgetPreviewValue(widget, value) {
+    if (!widget) return;
+    widget.value = value;
+    widget.callback?.(value);
+    app.graph.setDirtyCanvas(true, true);
+}
+
+async function updatePrepareStatus(node, label, completed, total, currentIndex = null) {
     setBatchStatus(node, {
         batch_id: null,
         label,
@@ -276,6 +283,7 @@ async function updatePrepareStatus(node, label, completed, total) {
         submitted: 0,
         total,
         completed,
+        current_index: currentIndex,
         prompt_ids: [],
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -482,10 +490,12 @@ async function queueAllSequential(node) {
             }
             prompts.push(prompt);
             if (i === 0 || (i + 1) % 5 === 0 || i + 1 === sequence.length) {
-                await updatePrepareStatus(node, "逐行入队", i + 1, sequence.length);
+                setWidgetPreviewValue(wIndex, idx);
+                await updatePrepareStatus(node, "逐行入队", i + 1, sequence.length, idx);
             }
         }
     } finally {
+        setWidgetPreviewValue(wIndex, prevIndex);
         QueueManager.invalidatePromptCache();
     }
 
@@ -606,10 +616,12 @@ async function queueAllShuffled(node) {
             }
             prompts.push(prompt);
             if (i === 0 || (i + 1) % 5 === 0 || i + 1 === sequence.length) {
-                await updatePrepareStatus(node, "乱序入队", i + 1, sequence.length);
+                setWidgetPreviewValue(wIndex, idx);
+                await updatePrepareStatus(node, "乱序入队", i + 1, sequence.length, idx);
             }
         }
     } finally {
+        setWidgetPreviewValue(wIndex, prevIndex);
         QueueManager.invalidatePromptCache();
     }
 
@@ -960,7 +972,10 @@ function createTextListUI(node) {
             return;
         }
         if (!status.batch_id && status.status === "准备中") {
-            batchInfo.textContent = `${status.label || "批次"} 准备中 ${status.completed || 0}/${status.total || 0}`;
+            const indexText = status.current_index !== null && status.current_index !== undefined
+                ? `，当前index ${status.current_index}`
+                : "";
+            batchInfo.textContent = `${status.label || "批次"} 准备中 ${status.completed || 0}/${status.total || 0}${indexText}`;
             return;
         }
         const id = status.batch_id ? status.batch_id.slice(0, 8) : "-";
