@@ -2,12 +2,14 @@ try:
     from .batch_load_images import BatchLoadImages, BatchSaveImages, VNCCS_PositionControl, VNCCS_VisualPositionControl
     from .batch_load_texts import BatchLoadTexts
     from .trigger_lora_stack import GlowTriggerLoRAStack
+    from .dynamic_typed_outputs import GlowDynamicTypedOutputs
 except ImportError:
     # Allow import outside ComfyUI (e.g. pytest with direct module imports)
     BatchLoadImages = None
     BatchSaveImages = None
     BatchLoadTexts = None
     GlowTriggerLoRAStack = None
+    GlowDynamicTypedOutputs = None
     VNCCS_PositionControl = None
     VNCCS_VisualPositionControl = None
 
@@ -410,6 +412,7 @@ NODE_CLASS_MAPPINGS = {
     "BatchSaveImages": BatchSaveImages,
     "BatchLoadTexts": BatchLoadTexts,
     "GlowTriggerLoRAStack": GlowTriggerLoRAStack,
+    "GlowDynamicTypedOutputs": GlowDynamicTypedOutputs,
     "VNCCS_PositionControl": VNCCS_PositionControl,
     "VNCCS_VisualPositionControl": VNCCS_VisualPositionControl,
     "GlowAPILLMLoader": GlowAPILLMLoader,
@@ -425,6 +428,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "BatchSaveImages": "GlowLoader 保存文件夹图像",
     "BatchLoadTexts": "GlowLoader 加载文件夹文本",
     "GlowTriggerLoRAStack": "GlowLoader 触发 LoRA Stack",
+    "GlowDynamicTypedOutputs": "GlowLoader 动态类型输出",
     "VNCCS_PositionControl": "VNCCS Position Control (Prompt)",
     "VNCCS_VisualPositionControl": "VNCCS Visual Position Control (Prompt)",
     "GlowAPILLMLoader": "GlowLoader API LLM 加载器",
