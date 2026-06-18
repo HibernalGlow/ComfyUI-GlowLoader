@@ -57,6 +57,7 @@ class GlowBatchCoordinator:
             "submitted": batch["submitted"],
             "total": len(batch["prompts"]),
             "completed": batch["completed"],
+            "queue": dict(batch.get("queue_counts") or {"pending": 0, "running": 0, "total": 0}),
             "prompt_ids": list(batch["prompt_ids"]),
             "error": batch.get("error", ""),
         }
@@ -86,6 +87,7 @@ class GlowBatchCoordinator:
             "prompts": prompts,
             "submitted": 0,
             "completed": 0,
+            "queue_counts": {"pending": 0, "running": 0, "total": 0},
             "prompt_ids": [],
             "status": "queued",
             "error": "",
@@ -195,6 +197,7 @@ class GlowBatchCoordinator:
                 return
 
             counts = await self._queue_counts(session, batch["base_url"])
+            batch["queue_counts"] = counts
             capacity = max(0, batch["threshold"] - counts["total"])
             if capacity <= 0:
                 await asyncio.sleep(sleep_s)
@@ -219,6 +222,7 @@ class GlowBatchCoordinator:
             if completed >= len(batch["prompt_ids"]):
                 break
             counts = await self._queue_counts(session, batch["base_url"])
+            batch["queue_counts"] = counts
             if counts["total"] <= 0:
                 batch["completed"] = len(batch["prompt_ids"])
                 break

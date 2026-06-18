@@ -249,7 +249,7 @@ async function submitPromptBatch(node, label, prompts) {
     return batch;
 }
 
-function patchTextPrompt(prompt, node, index, seedValue) {
+function patchTextPrompt(prompt, node, index, { seedValue, shuffle, allowDuplicate } = {}) {
     const nodeId = String(node.id);
     const apiNode = prompt.output?.[nodeId];
     if (!apiNode) return;
@@ -258,6 +258,12 @@ function patchTextPrompt(prompt, node, index, seedValue) {
     apiNode.inputs.index = index;
     if (seedValue !== undefined) {
         apiNode.inputs.seed = seedValue;
+    }
+    if (shuffle !== undefined) {
+        apiNode.inputs.shuffle = shuffle;
+    }
+    if (allowDuplicate !== undefined) {
+        apiNode.inputs.allow_duplicate = allowDuplicate;
     }
 }
 
@@ -281,14 +287,14 @@ function deepClone(obj) {
 }
 
 // 调用后端生成入队序列
-async function generateQueueSequence(node) {
+async function generateQueueSequence(node, overrides = {}) {
     const sourceMode = getSourceModeValue(node);
     const textList = getTextListWidget(node)?.value || "";
     const fileMode = getFileModeValue(node);
     const maxTexts = getMaxTextsValue(node);
     const queueCount = getQueueCountValue(node);
-    const shuffle = getShuffleValue(node);
-    const allowDuplicate = getAllowDuplicateValue(node);
+    const shuffle = overrides.shuffle ?? getShuffleValue(node);
+    const allowDuplicate = overrides.allowDuplicate ?? getAllowDuplicateValue(node);
     const seed = getSeedValue(node);
 
     const resp = await api.fetchApi("/glowloader/generate_sequence_texts", {
@@ -427,22 +433,19 @@ async function queueAllSequential(node) {
 
     let sequence;
     try {
-        sequence = await generateQueueSequence(node);
+        sequence = await generateQueueSequence(node, { shuffle: false });
     } catch (e) {
         console.warn("Backend sequence generation failed, using frontend fallback:", e);
         const fileMode = getFileModeValue(node);
         const queueCount = getQueueCountValue(node);
-        const shuffle = getShuffleValue(node);
         const allowDuplicate = getAllowDuplicateValue(node);
         const seed = getSeedValue(node);
 
         if (sourceMode === "files") {
             const count = queueCount > 0 ? queueCount : texts.length;
-            sequence = Array.from({ length: count }, (_, i) =>
-                shuffle ? Math.floor(Math.random() * texts.length) : i
-            );
+            sequence = Array.from({ length: count }, (_, i) => i);
         } else {
-            sequence = generateSequenceFallback(texts.length, queueCount, shuffle, allowDuplicate, seed);
+            sequence = generateSequenceFallback(texts.length, queueCount, false, allowDuplicate, seed);
         }
     }
 
@@ -468,13 +471,13 @@ async function queueAllSequential(node) {
             const idx = sequence[i];
             const prompt = deepClone(basePrompt);
             const seedValue = wSeed && prevSeed === -1 ? Math.floor(Math.random() * 2147483647) : undefined;
-            patchTextPrompt(prompt, node, idx, seedValue);
+            patchTextPrompt(prompt, node, idx, { seedValue, shuffle: false });
             for (const s of syncStates) {
                 if (s.sequence.length > 0) {
                     const syncIdx = s.sequence[i % s.sequence.length];
                     const syncSeedW = getWidgetByName(s.node, "seed");
                     const syncSeedValue = syncSeedW && s.prevSeed === -1 ? Math.floor(Math.random() * 2147483647) : undefined;
-                    patchTextPrompt(prompt, s.node, syncIdx, syncSeedValue);
+                    patchTextPrompt(prompt, s.node, syncIdx, { seedValue: syncSeedValue });
                 }
             }
             prompts.push(prompt);
@@ -533,21 +536,11 @@ function generateSequenceFallback(totalEntries, queueCount, shuffle, allowDuplic
         }
     } else {
         if (allowDuplicate) {
-            return Array.from({ length: count }, (_, i) => i);
+            return Array.from({ length: count }, (_, i) => i % totalEntries);
         } else {
             return indices.slice(0, Math.min(count, totalEntries));
         }
     }
-}
-
-// Fisher-Yates 洗牌算法（独立版本）
-function shuffleArraySimple(array) {
-    const arr = array.slice();
-    for (let i = arr.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
 }
 
 async function queueAllShuffled(node) {
@@ -562,29 +555,25 @@ async function queueAllShuffled(node) {
 
     let sequence;
     try {
-        sequence = await generateQueueSequence(node);
+        sequence = await generateQueueSequence(node, { shuffle: true });
     } catch (e) {
         console.warn("Backend sequence generation failed, using frontend fallback:", e);
         const fileMode = getFileModeValue(node);
         const queueCount = getQueueCountValue(node);
-        const shuffle = getShuffleValue(node);
         const allowDuplicate = getAllowDuplicateValue(node);
         const seed = getSeedValue(node);
 
         if (sourceMode === "files") {
             const count = queueCount > 0 ? queueCount : texts.length;
             sequence = Array.from({ length: count }, (_, i) =>
-                shuffle ? Math.floor(Math.random() * texts.length) : i
+                Math.floor(Math.random() * texts.length)
             );
         } else {
-            sequence = generateSequenceFallback(texts.length, queueCount, shuffle, allowDuplicate, seed);
+            sequence = generateSequenceFallback(texts.length, queueCount, true, allowDuplicate, seed);
         }
     }
 
     if (sequence.length === 0) return;
-
-    // 对序列进行乱序
-    sequence = shuffleArraySimple(sequence);
 
     const prompts = [];
     const wMode = getWidgetByName(node, "mode");
@@ -606,13 +595,13 @@ async function queueAllShuffled(node) {
             const idx = sequence[i];
             const prompt = deepClone(basePrompt);
             const seedValue = wSeed && prevSeed === -1 ? Math.floor(Math.random() * 2147483647) : undefined;
-            patchTextPrompt(prompt, node, idx, seedValue);
+            patchTextPrompt(prompt, node, idx, { seedValue, shuffle: false });
             for (const s of syncStates) {
                 if (s.sequence.length > 0) {
                     const syncIdx = s.sequence[i % s.sequence.length];
                     const syncSeedW = getWidgetByName(s.node, "seed");
                     const syncSeedValue = syncSeedW && s.prevSeed === -1 ? Math.floor(Math.random() * 2147483647) : undefined;
-                    patchTextPrompt(prompt, s.node, syncIdx, syncSeedValue);
+                    patchTextPrompt(prompt, s.node, syncIdx, { seedValue: syncSeedValue });
                 }
             }
             prompts.push(prompt);
@@ -970,8 +959,14 @@ function createTextListUI(node) {
             batchInfo.textContent = "";
             return;
         }
+        if (!status.batch_id && status.status === "准备中") {
+            batchInfo.textContent = `${status.label || "批次"} 准备中 ${status.completed || 0}/${status.total || 0}`;
+            return;
+        }
         const id = status.batch_id ? status.batch_id.slice(0, 8) : "-";
-        batchInfo.textContent = `批次 ${id} ${status.status} ${status.completed || 0}/${status.total || 0}（已提交 ${status.submitted || 0}）`;
+        const queue = status.queue || {};
+        const queueText = queue.total > 0 ? `，队列 ${queue.total}（运行 ${queue.running || 0}/等待 ${queue.pending || 0}）` : "";
+        batchInfo.textContent = `批次 ${id} ${status.status} 已提交 ${status.submitted || 0}/${status.total || 0}，完成 ${status.completed || 0}/${status.total || 0}${queueText}`;
     };
 
     const listContainer = document.createElement("div");

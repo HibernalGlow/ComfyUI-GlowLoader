@@ -858,8 +858,14 @@ function createBrowserUI(node) {
             batchInfo.textContent = "";
             return;
         }
+        if (!status.batch_id && status.status === "准备中") {
+            batchInfo.textContent = `${status.label || "批次"} 准备中 ${status.completed || 0}/${status.total || 0}`;
+            return;
+        }
         const id = status.batch_id ? status.batch_id.slice(0, 8) : "-";
-        batchInfo.textContent = `批次 ${id} ${status.status} ${status.completed || 0}/${status.total || 0}（已提交 ${status.submitted || 0}）`;
+        const queue = status.queue || {};
+        const queueText = queue.total > 0 ? `，队列 ${queue.total}（运行 ${queue.running || 0}/等待 ${queue.pending || 0}）` : "";
+        batchInfo.textContent = `批次 ${id} ${status.status} 已提交 ${status.submitted || 0}/${status.total || 0}，完成 ${status.completed || 0}/${status.total || 0}${queueText}`;
     };
 
     const grid = document.createElement("div");
