@@ -1,6 +1,10 @@
 import { app } from "../../../scripts/app.js";
 
 const MAX_TRIGGER_LORAS = 30;
+const HIDDEN_WIDGET_HEIGHT = -4;
+const COMPACT_TEXT_HEIGHT = 26;
+const COMPACT_ROW_HEIGHT = 16;
+const COMPACT_ROW_GAP = 2;
 
 function getWidget(node, name) {
     return node?.widgets?.find((widget) => widget.name === name);
@@ -12,15 +16,89 @@ function setWidgetVisible(widget, visible) {
         widget._glowTriggerLoraOriginal = {
             type: widget.type,
             computeSize: widget.computeSize,
+            serializeValue: widget.serializeValue,
         };
     }
     if (visible) {
         widget.type = widget._glowTriggerLoraOriginal.type;
         widget.computeSize = widget._glowTriggerLoraOriginal.computeSize;
+        widget.serializeValue = widget._glowTriggerLoraOriginal.serializeValue;
+        widget.hidden = false;
+        if (widget.options) widget.options.hidden = false;
     } else {
         widget.type = "hidden";
-        widget.computeSize = () => [0, -4];
+        widget.hidden = true;
+        if (widget.options) widget.options.hidden = true;
+        widget.computeSize = () => [0, HIDDEN_WIDGET_HEIGHT];
+        widget.serializeValue = widget._glowTriggerLoraOriginal.serializeValue || (() => widget.value);
     }
+}
+
+function notifyVue(node) {
+    const widgets = node.widgets;
+    if (!widgets?.length) return;
+    const last = widgets.pop();
+    widgets.push(last);
+}
+
+function patchNodeCSSSize(node) {
+    if (node.id == null) return;
+    const el = document.querySelector(`[data-node-id="${node.id}"]`);
+    if (!el) return;
+    el.style.setProperty("--node-width", `${node.size[0]}px`);
+    el.style.setProperty("--node-height", `${node.size[1]}px`);
+}
+
+function compactTextElement(element) {
+    if (!element) return;
+    const targets = [];
+    if (element.tagName === "TEXTAREA" || element.tagName === "INPUT") targets.push(element);
+    if (element.querySelectorAll) targets.push(...element.querySelectorAll("textarea, input"));
+    for (const target of targets) {
+        target.rows = 1;
+        target.style.height = "26px";
+        target.style.minHeight = "26px";
+        target.style.maxHeight = "26px";
+        target.style.resize = "none";
+        target.style.overflow = "hidden";
+    }
+}
+
+function compactInputTextWidget(node) {
+    const widget = getWidget(node, "input_text");
+    if (!widget) return;
+    widget.computeSize = (width) => [width, COMPACT_TEXT_HEIGHT];
+    if (widget.options && typeof widget.options === "object") {
+        widget.options.multiline = false;
+        widget.options.rows = 1;
+    }
+    compactTextElement(widget.inputEl);
+    compactTextElement(widget.element);
+    compactTextElement(widget.el);
+    if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => {
+            compactTextElement(widget.inputEl);
+            compactTextElement(widget.element);
+            compactTextElement(widget.el);
+        });
+    }
+    setTimeout(() => {
+        compactTextElement(widget.inputEl);
+        compactTextElement(widget.element);
+        compactTextElement(widget.el);
+    }, 50);
+}
+
+function getVisibleWidgets(node) {
+    return (node.widgets || []).filter((widget) => widget.type !== "hidden" && !widget.hidden);
+}
+
+function getCompactWidgetHeight(widget, width) {
+    if (widget.name === "input_text") return COMPACT_TEXT_HEIGHT;
+    const size = widget.computeSize?.(width);
+    const height = Number(size?.[1]);
+    if (Number.isFinite(height) && height > 0 && height <= 22) return height;
+    return COMPACT_ROW_HEIGHT;
 }
 
 function clampCount(value) {
@@ -65,14 +143,66 @@ function localizeWidgets(node) {
     }
 }
 
-function resizeNode(node, count) {
+function estimateCompactHeight(node) {
     const width = Math.max(node.size?.[0] || 420, 420);
-    const height = Math.max(260, 280 + count * 132);
+    const visibleWidgets = getVisibleWidgets(node);
+
+    let layoutBottom = 0;
+    for (const widget of visibleWidgets) {
+        const y = Number(widget.last_y);
+        if (Number.isFinite(y) && y > 0 && y < 5000) {
+            layoutBottom = Math.max(layoutBottom, y + getCompactWidgetHeight(widget, width) + 8);
+        }
+    }
+
+    const widgetHeight =
+        26 +
+        visibleWidgets.reduce(
+            (total, widget) => total + getCompactWidgetHeight(widget, width) + COMPACT_ROW_GAP,
+            0
+        );
+    const slotRows = Math.max(node.inputs?.length || 0, node.outputs?.length || 0);
+    const slotHeight = 24 + slotRows * 16;
+    return Math.ceil(Math.max(layoutBottom || widgetHeight, widgetHeight, slotHeight, 140) + 8);
+}
+
+function installCompactSizing(node) {
+    if (node._glowTriggerLoraCompactSizingInstalled) return;
+    node._glowTriggerLoraCompactSizingInstalled = true;
+    node._glowTriggerLoraOriginalComputeSize = node.computeSize?.bind(node);
+    node.computeSize = function () {
+        const width = Math.max(this.size?.[0] || 420, 420);
+        return [width, estimateCompactHeight(this)];
+    };
+}
+
+function resizeNode(node) {
+    const width = Math.max(node.size?.[0] || 420, 420);
+    if (node.size) node.size[1] = 0;
+    const height = estimateCompactHeight(node);
     node.size = [width, height];
     node.setSize?.([width, height]);
+    node.size[0] = width;
+    node.size[1] = height;
+    node.onResize?.([width, height]);
+    patchNodeCSSSize(node);
+    notifyVue(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
+function scheduleResize(node) {
+    resizeNode(node);
+    if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => resizeNode(node));
+        requestAnimationFrame(() => requestAnimationFrame(() => resizeNode(node)));
+    }
+    setTimeout(() => resizeNode(node), 50);
+    setTimeout(() => resizeNode(node), 200);
 }
 
 function updateVisibleGroups(node) {
+    installCompactSizing(node);
+    compactInputTextWidget(node);
     const count = clampCount(getWidget(node, "lora_count")?.value ?? 0);
     removeInput(node, "trigger_text_in");
     for (let i = 1; i <= MAX_TRIGGER_LORAS; i++) {
@@ -95,7 +225,7 @@ function updateVisibleGroups(node) {
         }
     }
     localizeWidgets(node);
-    resizeNode(node, count);
+    scheduleResize(node);
     app.graph.setDirtyCanvas(true, true);
 }
 
@@ -129,5 +259,11 @@ app.registerExtension({
             updateVisibleGroups(this);
             return result;
         };
+    },
+
+    loadedGraphNode(node) {
+        const nodeName = node.comfyClass || node.type || node.constructor?.nodeData?.name;
+        if (nodeName !== "GlowTriggerLoRAStack") return;
+        updateVisibleGroups(node);
     },
 });

@@ -58,7 +58,7 @@ class GlowTriggerLoRAStack:
         loras = ["None"] + folder_paths.get_filename_list("loras")
         required = {
             "lora_count": ("INT", {"default": 3, "min": 0, "max": MAX_TRIGGER_LORAS, "step": 1}),
-            "input_text": ("STRING", {"multiline": True, "default": ""}),
+            "input_text": ("STRING", {"multiline": False, "default": ""}),
         }
 
         for index in range(1, MAX_TRIGGER_LORAS + 1):
