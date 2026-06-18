@@ -19,13 +19,31 @@ function clampCount(value) {
 
 function normalizeType(type, customType = "") {
     const normalized = String(type || "FLOAT").trim().toUpperCase();
-    if (!normalized) return "FLOAT";
-    if (normalized === "ANY") return "*";
+    if (!normalized || normalized === "*" || normalized === "ANY") return "FLOAT";
     if (normalized === "CUSTOM") {
         const custom = String(customType || "").trim().toUpperCase();
-        return custom || "*";
+        return custom || "FLOAT";
     }
     return normalized;
+}
+
+function cleanTypeWidget(widget) {
+    if (!widget) return;
+    const value = String(widget.value ?? "").trim().toUpperCase();
+    if (!value || value === "*" || value === "ANY") {
+        widget.value = "FLOAT";
+    }
+
+    for (const holder of [widget, widget.options]) {
+        if (!holder || typeof holder !== "object") continue;
+        for (const key of ["values", "items", "options"]) {
+            if (!Array.isArray(holder[key])) continue;
+            holder[key] = holder[key].filter((item) => {
+                const text = String(item ?? "").trim().toUpperCase();
+                return text && text !== "*" && text !== "ANY";
+            });
+        }
+    }
 }
 
 function selectedType(node, index) {
@@ -97,8 +115,16 @@ function patchNodeCSSSize(node) {
 }
 
 function estimateHeight(node) {
-    const visibleWidgetRows = getVisibleWidgets(node).length;
-    const slotRows = Math.max(node.inputs?.length || 0, node.outputs?.length || 0);
+    const count = selectedCount(node);
+    let visibleWidgetRows = 2; // output_count + index
+    for (let index = 1; index <= count; index += 1) {
+        const rawType = selectedTypeRaw(node, index);
+        const actualType = selectedType(node, index);
+        visibleWidgetRows += 1; // type_N
+        if (rawType === "CUSTOM") visibleWidgetRows += 1;
+        if (DEFAULTABLE_TYPES.has(actualType)) visibleWidgetRows += 1;
+    }
+    const slotRows = count + 1;
     return Math.max(110, 42 + visibleWidgetRows * 24 + slotRows * 14);
 }
 
@@ -124,6 +150,22 @@ function installSizing(node) {
         scheduleSizeGuard(this);
         return result;
     };
+
+    const originalOnSerialize = node.onSerialize;
+    node.onSerialize = function (serialized) {
+        const result = originalOnSerialize?.apply(this, arguments);
+        applyCompactSize(this, serialized);
+        return result;
+    };
+
+    const originalSerialize = node.serialize;
+    if (typeof originalSerialize === "function") {
+        node.serialize = function () {
+            const serialized = originalSerialize.apply(this, arguments);
+            applyCompactSize(this, serialized);
+            return serialized;
+        };
+    }
 }
 
 function resizeNode(node) {
@@ -141,6 +183,31 @@ function resizeNode(node) {
     } finally {
         node._glowDynamicResizing = false;
     }
+}
+
+function compactSize(node) {
+    const width = Math.max(node.size?.[0] || MIN_NODE_WIDTH, MIN_NODE_WIDTH);
+    return [width, estimateHeight(node)];
+}
+
+function applyCompactSize(node, serialized = null) {
+    const size = compactSize(node);
+    node._glowDynamicResizing = true;
+    try {
+        node.size = [...size];
+        node.setSize?.([...size]);
+        patchNodeCSSSize(node);
+        if (serialized && typeof serialized === "object") {
+            serialized.size = [...size];
+            serialized.properties = serialized.properties || {};
+            serialized.properties._glow_dynamic_compact_size = [...size];
+        }
+        node.properties = node.properties || {};
+        node.properties._glow_dynamic_compact_size = [...size];
+    } finally {
+        node._glowDynamicResizing = false;
+    }
+    return size;
 }
 
 function scheduleResize(node) {
@@ -168,8 +235,7 @@ function enforceCompactSize(node) {
 
     node._glowDynamicResizing = true;
     try {
-        node.size = [width, height];
-        node.setSize?.([width, height]);
+        applyCompactSize(node);
         patchNodeCSSSize(node);
         notifyVue(node);
         node.setDirtyCanvas?.(true, true);
@@ -253,7 +319,7 @@ function syncIndexOutput(node, count = selectedCount(node)) {
     const index = selectedIndex(node);
     const selectedOutput = node.outputs?.[count];
     if (selectedOutput) {
-        const type = index <= count ? selectedType(node, index) : "*";
+        const type = selectedType(node, index);
         const label = `index ${index} ${displayType(type)}`;
         selectedOutput.name = label;
         selectedOutput.type = type;
@@ -293,6 +359,7 @@ function syncProperties(node, count) {
 function updateVisibleWidgets(node, count) {
     for (let index = 1; index <= MAX_DYNAMIC_OUTPUTS; index += 1) {
         const active = index <= count;
+        cleanTypeWidget(getWidget(node, `type_${index}`));
         const rawType = selectedTypeRaw(node, index);
         const actualType = selectedType(node, index);
         setWidgetVisible(getWidget(node, `type_${index}`), active);

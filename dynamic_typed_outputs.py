@@ -23,6 +23,7 @@ OUTPUT_TYPE_CHOICES = [
     "VIDEO",
     "CUSTOM",
 ]
+LEGACY_OUTPUT_TYPE_CHOICES = ["", "*"]
 
 
 class AnyType(str):
@@ -42,12 +43,12 @@ def _clamp_count(value):
 
 
 def _normalize_type(output_type, custom_type=""):
-    output_type = str(output_type or "*").strip().upper()
-    if output_type in ("ANY", ""):
-        return "*"
+    output_type = str(output_type or "").strip().upper()
+    if output_type in ("", "*", "ANY"):
+        return "FLOAT"
     if output_type == "CUSTOM":
         custom_type = str(custom_type or "").strip().upper()
-        return custom_type or "*"
+        return custom_type or "FLOAT"
     return output_type
 
 
@@ -97,9 +98,10 @@ class GlowDynamicTypedOutputs:
             ),
         }
         optional = {}
+        type_choices = OUTPUT_TYPE_CHOICES + LEGACY_OUTPUT_TYPE_CHOICES
 
         for index in range(1, MAX_DYNAMIC_OUTPUTS + 1):
-            required[f"type_{index}"] = (OUTPUT_TYPE_CHOICES, {"default": "FLOAT"})
+            required[f"type_{index}"] = (type_choices, {"default": "FLOAT"})
             required[f"custom_type_{index}"] = ("STRING", {"default": ""})
             required[f"default_value_{index}"] = ("STRING", {"default": ""})
             optional[f"input_{index}"] = (any_type,)

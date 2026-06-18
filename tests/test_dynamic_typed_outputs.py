@@ -112,3 +112,20 @@ def test_new_nodes_default_to_float_outputs_not_any_choice():
 
     outputs = GlowDynamicTypedOutputs().emit(output_count=2)
     assert outputs[:2] == (0.0, 0.0)
+
+
+def test_legacy_empty_and_any_type_values_validate_and_fall_back_to_float():
+    input_types = GlowDynamicTypedOutputs.INPUT_TYPES()
+    type_choices = input_types["required"]["type_26"][0]
+    assert "" in type_choices
+    assert "*" in type_choices
+
+    outputs = GlowDynamicTypedOutputs().emit(
+        output_count=2,
+        type_1="",
+        default_value_1="1.5",
+        type_2="*",
+        default_value_2="2.5",
+    )
+
+    assert outputs[:2] == (1.5, 2.5)

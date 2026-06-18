@@ -145,29 +145,17 @@ function localizeWidgets(node) {
 }
 
 function estimateCompactHeight(node) {
-    const width = Math.max(node.size?.[0] || 420, 420);
-    const visibleWidgets = getVisibleWidgets(node);
-
-    let layoutBottom = 0;
-    for (const widget of visibleWidgets) {
-        const y = Number(widget.last_y);
-        if (Number.isFinite(y) && y > 0 && y < 5000) {
-            layoutBottom = Math.max(layoutBottom, y + getCompactWidgetHeight(widget, width) + 8);
-        }
-    }
-
+    const count = clampCount(getWidget(node, "lora_count")?.value ?? 0);
+    const visibleWidgetRows = 2 + count * 5; // lora_count + input_text + 5 controls per LoRA
     const widgetHeight =
         26 +
-        visibleWidgets.reduce(
-            (total, widget) => total + getCompactWidgetHeight(widget, width) + COMPACT_ROW_GAP,
-            0
-        );
-    if (layoutBottom > widgetHeight + 80) {
-        layoutBottom = 0;
-    }
-    const slotRows = Math.max(node.inputs?.length || 0, node.outputs?.length || 0);
+        COMPACT_ROW_HEIGHT +
+        COMPACT_TEXT_HEIGHT +
+        count * 5 * COMPACT_ROW_HEIGHT +
+        visibleWidgetRows * COMPACT_ROW_GAP;
+    const slotRows = Math.max(count + 2, 3);
     const slotHeight = 24 + slotRows * 16;
-    return Math.ceil(Math.max(layoutBottom || widgetHeight, widgetHeight, slotHeight, 140) + 8);
+    return Math.ceil(Math.max(widgetHeight, slotHeight, 140) + 8);
 }
 
 function installCompactSizing(node) {
@@ -192,6 +180,22 @@ function installCompactSizing(node) {
         scheduleSizeGuard(this);
         return result;
     };
+
+    const originalOnSerialize = node.onSerialize;
+    node.onSerialize = function (serialized) {
+        const result = originalOnSerialize?.apply(this, arguments);
+        applyCompactSize(this, serialized);
+        return result;
+    };
+
+    const originalSerialize = node.serialize;
+    if (typeof originalSerialize === "function") {
+        node.serialize = function () {
+            const serialized = originalSerialize.apply(this, arguments);
+            applyCompactSize(this, serialized);
+            return serialized;
+        };
+    }
 }
 
 function resizeNode(node) {
@@ -212,6 +216,33 @@ function resizeNode(node) {
     } finally {
         node._glowTriggerLoraResizing = false;
     }
+}
+
+function compactSize(node) {
+    const width = Math.max(node.size?.[0] || 420, 420);
+    return [width, estimateCompactHeight(node)];
+}
+
+function applyCompactSize(node, serialized = null) {
+    const size = compactSize(node);
+    node._glowTriggerLoraResizing = true;
+    try {
+        node.size = [...size];
+        node.setSize?.([...size]);
+        node.size[0] = size[0];
+        node.size[1] = size[1];
+        patchNodeCSSSize(node);
+        if (serialized && typeof serialized === "object") {
+            serialized.size = [...size];
+            serialized.properties = serialized.properties || {};
+            serialized.properties._glow_trigger_lora_compact_size = [...size];
+        }
+        node.properties = node.properties || {};
+        node.properties._glow_trigger_lora_compact_size = [...size];
+    } finally {
+        node._glowTriggerLoraResizing = false;
+    }
+    return size;
 }
 
 function scheduleResize(node) {
@@ -241,10 +272,7 @@ function enforceCompactSize(node) {
 
     node._glowTriggerLoraResizing = true;
     try {
-        node.size = [width, height];
-        node.setSize?.([width, height]);
-        node.size[0] = width;
-        node.size[1] = height;
+        applyCompactSize(node);
         patchNodeCSSSize(node);
         notifyVue(node);
         node.setDirtyCanvas?.(true, true);
