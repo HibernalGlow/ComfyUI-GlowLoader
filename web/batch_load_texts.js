@@ -45,6 +45,7 @@ function setTextList(node, texts) {
         w.inputEl.dispatchEvent(new Event("change", { bubbles: true }));
     }
     w.callback?.(value);
+    QueueManager.invalidatePromptCache();
 }
 
 const EXCLUDED_TEXT_INDICES_PROP = "glowloader_excluded_text_indices";
@@ -248,6 +249,32 @@ async function submitPromptBatch(node, label, prompts) {
     return batch;
 }
 
+function patchTextPrompt(prompt, node, index, seedValue) {
+    const nodeId = String(node.id);
+    const apiNode = prompt.output?.[nodeId];
+    if (!apiNode) return;
+    apiNode.inputs = apiNode.inputs || {};
+    apiNode.inputs.mode = "single";
+    apiNode.inputs.index = index;
+    if (seedValue !== undefined) {
+        apiNode.inputs.seed = seedValue;
+    }
+}
+
+async function updatePrepareStatus(node, label, completed, total) {
+    setBatchStatus(node, {
+        batch_id: null,
+        label,
+        status: "准备中",
+        threshold: getQueueThresholdValue(node),
+        submitted: 0,
+        total,
+        completed,
+        prompt_ids: [],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 // deepClone 委托给 QueueManager
 function deepClone(obj) {
     return QueueManager.deepClone(obj);
@@ -389,6 +416,7 @@ async function collectSyncNodeStates(excludeNode, stepCount) {
 }
 
 async function queueAllSequential(node) {
+    QueueManager.resetAbort();
     const sourceMode = getSourceModeValue(node);
     const texts0 = parseTextList(getTextListWidget(node)?.value);
     if (!texts0 || texts0.length === 0) return;
@@ -432,90 +460,33 @@ async function queueAllSequential(node) {
     const wSeed = getWidgetByName(node, "seed");
     const prevSeed = wSeed?.value;
 
+    QueueManager.invalidatePromptCache();
+    const basePrompt = deepClone(await QueueManager.getPrompt());
     try {
-        if (wMode) {
-            wMode.value = "single";
-            wMode.callback?.(wMode.value);
-        }
-
         for (let i = 0; i < sequence.length; i++) {
+            if (QueueManager.aborted) break;
             const idx = sequence[i];
-            if (wIndex) {
-                wIndex.value = idx;
-                wIndex.callback?.(wIndex.value);
-            }
-
-            if (wSeed && prevSeed === -1) {
-                const newSeed = Math.floor(Math.random() * 2147483647);
-                wSeed.value = newSeed;
-                wSeed.callback?.(newSeed);
-            }
-
+            const prompt = deepClone(basePrompt);
+            const seedValue = wSeed && prevSeed === -1 ? Math.floor(Math.random() * 2147483647) : undefined;
+            patchTextPrompt(prompt, node, idx, seedValue);
             for (const s of syncStates) {
                 if (s.sequence.length > 0) {
                     const syncIdx = s.sequence[i % s.sequence.length];
-                    s.indexWidget.value = syncIdx;
-                    s.indexWidget.callback?.(syncIdx);
-                }
-                const syncSeedW = getWidgetByName(s.node, "seed");
-                if (syncSeedW && s.prevSeed === -1) {
-                    const newSeed = Math.floor(Math.random() * 2147483647);
-                    syncSeedW.value = newSeed;
-                    syncSeedW.callback?.(newSeed);
-                }
-            }
-
-            QueueManager.invalidatePromptCache();
-            const prompt = deepClone(await QueueManager.getPrompt());
-            if (!wIndex) {
-                const nodeId = String(node.id);
-                const apiNode = prompt.output?.[nodeId];
-                if (!apiNode) continue;
-                apiNode.inputs = apiNode.inputs || {};
-                apiNode.inputs.mode = "single";
-                apiNode.inputs.index = idx;
-                if (wSeed && prevSeed === -1) {
-                    apiNode.inputs.seed = wSeed.value;
-                }
-                for (const s of syncStates) {
-                    const syncNodeId = String(s.node.id);
-                    const syncApiNode = prompt.output?.[syncNodeId];
-                    if (syncApiNode) {
-                        syncApiNode.inputs = syncApiNode.inputs || {};
-                        syncApiNode.inputs.index = s.indexWidget.value;
-                        const syncSeedW = getWidgetByName(s.node, "seed");
-                        if (syncSeedW && s.prevSeed === -1) {
-                            syncApiNode.inputs.seed = syncSeedW.value;
-                        }
-                    }
+                    const syncSeedW = getWidgetByName(s.node, "seed");
+                    const syncSeedValue = syncSeedW && s.prevSeed === -1 ? Math.floor(Math.random() * 2147483647) : undefined;
+                    patchTextPrompt(prompt, s.node, syncIdx, syncSeedValue);
                 }
             }
             prompts.push(prompt);
-        }
-    } finally {
-        if (wMode) {
-            wMode.value = prevMode;
-            wMode.callback?.(wMode.value);
-        }
-        if (wIndex) {
-            wIndex.value = prevIndex;
-            wIndex.callback?.(wIndex.value);
-        }
-        if (wSeed) {
-            wSeed.value = prevSeed;
-            wSeed.callback?.(prevSeed);
-        }
-        for (const s of syncStates) {
-            s.indexWidget.value = s.prevIndex;
-            s.indexWidget.callback?.(s.prevIndex);
-            const syncSeedW = getWidgetByName(s.node, "seed");
-            if (syncSeedW && s.prevSeed !== undefined) {
-                syncSeedW.value = s.prevSeed;
-                syncSeedW.callback?.(s.prevSeed);
+            if (i === 0 || (i + 1) % 5 === 0 || i + 1 === sequence.length) {
+                await updatePrepareStatus(node, "逐行入队", i + 1, sequence.length);
             }
         }
+    } finally {
+        QueueManager.invalidatePromptCache();
     }
 
+    if (prompts.length === 0) return;
     return submitPromptBatch(node, "逐行入队", prompts);
 }
 
@@ -580,6 +551,7 @@ function shuffleArraySimple(array) {
 }
 
 async function queueAllShuffled(node) {
+    QueueManager.resetAbort();
     const sourceMode = getSourceModeValue(node);
     const texts0 = parseTextList(getTextListWidget(node)?.value);
     if (!texts0 || texts0.length === 0) return;
@@ -626,90 +598,33 @@ async function queueAllShuffled(node) {
     const wSeed = getWidgetByName(node, "seed");
     const prevSeed = wSeed?.value;
 
+    QueueManager.invalidatePromptCache();
+    const basePrompt = deepClone(await QueueManager.getPrompt());
     try {
-        if (wMode) {
-            wMode.value = "single";
-            wMode.callback?.(wMode.value);
-        }
-
         for (let i = 0; i < sequence.length; i++) {
+            if (QueueManager.aborted) break;
             const idx = sequence[i];
-            if (wIndex) {
-                wIndex.value = idx;
-                wIndex.callback?.(wIndex.value);
-            }
-
-            if (wSeed && prevSeed === -1) {
-                const newSeed = Math.floor(Math.random() * 2147483647);
-                wSeed.value = newSeed;
-                wSeed.callback?.(newSeed);
-            }
-
+            const prompt = deepClone(basePrompt);
+            const seedValue = wSeed && prevSeed === -1 ? Math.floor(Math.random() * 2147483647) : undefined;
+            patchTextPrompt(prompt, node, idx, seedValue);
             for (const s of syncStates) {
                 if (s.sequence.length > 0) {
                     const syncIdx = s.sequence[i % s.sequence.length];
-                    s.indexWidget.value = syncIdx;
-                    s.indexWidget.callback?.(syncIdx);
-                }
-                const syncSeedW = getWidgetByName(s.node, "seed");
-                if (syncSeedW && s.prevSeed === -1) {
-                    const newSeed = Math.floor(Math.random() * 2147483647);
-                    syncSeedW.value = newSeed;
-                    syncSeedW.callback?.(newSeed);
-                }
-            }
-
-            QueueManager.invalidatePromptCache();
-            const prompt = deepClone(await QueueManager.getPrompt());
-            if (!wIndex) {
-                const nodeId = String(node.id);
-                const apiNode = prompt.output?.[nodeId];
-                if (!apiNode) continue;
-                apiNode.inputs = apiNode.inputs || {};
-                apiNode.inputs.mode = "single";
-                apiNode.inputs.index = idx;
-                if (wSeed && prevSeed === -1) {
-                    apiNode.inputs.seed = wSeed.value;
-                }
-                for (const s of syncStates) {
-                    const syncNodeId = String(s.node.id);
-                    const syncApiNode = prompt.output?.[syncNodeId];
-                    if (syncApiNode) {
-                        syncApiNode.inputs = syncApiNode.inputs || {};
-                        syncApiNode.inputs.index = s.indexWidget.value;
-                        const syncSeedW = getWidgetByName(s.node, "seed");
-                        if (syncSeedW && s.prevSeed === -1) {
-                            syncApiNode.inputs.seed = syncSeedW.value;
-                        }
-                    }
+                    const syncSeedW = getWidgetByName(s.node, "seed");
+                    const syncSeedValue = syncSeedW && s.prevSeed === -1 ? Math.floor(Math.random() * 2147483647) : undefined;
+                    patchTextPrompt(prompt, s.node, syncIdx, syncSeedValue);
                 }
             }
             prompts.push(prompt);
-        }
-    } finally {
-        if (wMode) {
-            wMode.value = prevMode;
-            wMode.callback?.(wMode.value);
-        }
-        if (wIndex) {
-            wIndex.value = prevIndex;
-            wIndex.callback?.(wIndex.value);
-        }
-        if (wSeed) {
-            wSeed.value = prevSeed;
-            wSeed.callback?.(prevSeed);
-        }
-        for (const s of syncStates) {
-            s.indexWidget.value = s.prevIndex;
-            s.indexWidget.callback?.(s.prevIndex);
-            const syncSeedW = getWidgetByName(s.node, "seed");
-            if (syncSeedW && s.prevSeed !== undefined) {
-                syncSeedW.value = s.prevSeed;
-                syncSeedW.callback?.(s.prevSeed);
+            if (i === 0 || (i + 1) % 5 === 0 || i + 1 === sequence.length) {
+                await updatePrepareStatus(node, "乱序入队", i + 1, sequence.length);
             }
         }
+    } finally {
+        QueueManager.invalidatePromptCache();
     }
 
+    if (prompts.length === 0) return;
     return submitPromptBatch(node, "乱序入队", prompts);
 }
 
@@ -976,22 +891,56 @@ function createTextListUI(node) {
     stopBtn.onclick = () => {
         QueueManager.stop();
     };
+
+    const setQueueButtonsDisabled = (disabled) => {
+        for (const btn of [queueBtn, queueShuffleBtn, queueOneBtn]) {
+            btn.disabled = disabled;
+            btn.style.opacity = disabled ? "0.55" : "";
+            btn.style.cursor = disabled ? "wait" : "pointer";
+        }
+    };
+
+    const runQueueAction = async (action) => {
+        if (QueueManager.queuing) return;
+        QueueManager.startQueuing();
+        setQueueButtonsDisabled(true);
+        try {
+            await action();
+        } catch (e) {
+            console.error("[BatchLoadTexts] 入队失败:", e);
+            setBatchStatus(node, {
+                batch_id: null,
+                label: "入队",
+                status: "错误",
+                threshold: getQueueThresholdValue(node),
+                submitted: 0,
+                total: 0,
+                completed: 0,
+                prompt_ids: [],
+            });
+        } finally {
+            QueueManager.endQueuing();
+            setQueueButtonsDisabled(false);
+        }
+    };
     
     queueBtn.onclick = async () => {
-        await queueAllSequential(node);
+        await runQueueAction(() => queueAllSequential(node));
     };
 
     queueShuffleBtn.onclick = async () => {
-        await queueAllShuffled(node);
+        await runQueueAction(() => queueAllShuffled(node));
     };
     
     queueOneBtn.onclick = async () => {
-        const wMode = getWidgetByName(node, "mode");
-        if (wMode) {
-            wMode.value = "single";
-            wMode.callback?.(wMode.value);
-        }
-        await queueCurrent(node);
+        await runQueueAction(async () => {
+            const wMode = getWidgetByName(node, "mode");
+            if (wMode) {
+                wMode.value = "single";
+                wMode.callback?.(wMode.value);
+            }
+            await queueCurrent(node);
+        });
     };
     
     clearBtn.onclick = () => {
