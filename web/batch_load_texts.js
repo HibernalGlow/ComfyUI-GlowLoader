@@ -53,18 +53,16 @@ function getMaxTextsValue(node) {
 }
 
 function getQueueCountValue(node) {
-    const w = node?.widgets?.find((x) => x.name === "queue_count");
-    const v = w?.value;
-    return typeof v === "number" ? v : 0;
+    return readIntWidget(node, "queue_count", 0, 0, 100000);
 }
 
 function getShuffleValue(node) {
-    const w = node?.widgets?.find((x) => x.name === "shuffle");
+    const w = getWidgetByName(node, "shuffle");
     return w?.value === true;
 }
 
 function getAllowDuplicateValue(node) {
-    const w = node?.widgets?.find((x) => x.name === "allow_duplicate");
+    const w = getWidgetByName(node, "allow_duplicate");
     return w?.value !== false;
 }
 
@@ -76,20 +74,34 @@ function getSeedValue(node) {
 
 // 从节点自身读取队列阈值
 function getQueueThresholdValue(node) {
-    const w = node?.widgets?.find((x) => x.name === "queue_threshold");
-    const v = w?.value;
-    return typeof v === "number" && v > 0 ? v : 199;
+    return readIntWidget(node, "queue_threshold", 199, 1, 1000);
 }
 
 // 从节点自身读取检查间隔
 function getCheckIntervalValue(node) {
-    const w = node?.widgets?.find((x) => x.name === "check_interval_ms");
-    const v = w?.value;
-    return typeof v === "number" && v > 0 ? v : 1000;
+    return readIntWidget(node, "check_interval_ms", 1000, 100, 60000);
 }
 
 function getWidgetByName(node, name) {
     return node?.widgets?.find((w) => w.name === name);
+}
+
+function readIntWidget(node, name, defaultValue, min, max) {
+    const w = getWidgetByName(node, name);
+    let v = parseInt(w?.value, 10);
+    if (Number.isNaN(v)) v = defaultValue;
+    if (typeof min === "number") v = Math.max(min, v);
+    if (typeof max === "number") v = Math.min(max, v);
+    return v;
+}
+
+function setWidgetValue(node, name, value) {
+    const w = getWidgetByName(node, name);
+    if (!w) return value;
+    w.value = value;
+    w.callback?.(w.value);
+    app.graph.setDirtyCanvas(true, true);
+    return w.value;
 }
 
 async function queueCurrent(node) {
@@ -274,8 +286,7 @@ async function queueAllSequential(node) {
 
     if (sequence.length === 0) return;
 
-    QueueManager.startQueuing();
-    try {
+    return QueueManager.runExclusive(async () => {
         const wMode = getWidgetByName(node, "mode");
         const wIndex = getWidgetByName(node, "index");
 
@@ -384,9 +395,7 @@ async function queueAllSequential(node) {
                 }
             }
         }
-    } finally {
-        QueueManager.endQueuing();
-    }
+    });
 }
 
 // 前端备用序列生成
@@ -484,8 +493,7 @@ async function queueAllShuffled(node) {
     // 对序列进行乱序
     sequence = shuffleArraySimple(sequence);
 
-    QueueManager.startQueuing();
-    try {
+    return QueueManager.runExclusive(async () => {
         const wMode = getWidgetByName(node, "mode");
         const wIndex = getWidgetByName(node, "index");
 
@@ -594,9 +602,7 @@ async function queueAllShuffled(node) {
                 }
             }
         }
-    } finally {
-        QueueManager.endQueuing();
-    }
+    });
 }
 
 // 上传单个文件
@@ -835,33 +841,21 @@ function createTextListUI(node) {
     // Queue Count
     settingsRow.appendChild(mkLabel("入队次数:"));
     const queueCountInput = mkInput("number", getQueueCountValue(node) || 0, (v) => {
-        const w = getWidgetByName(node, "queue_count");
-        if (w) {
-            w.value = parseInt(v) || 0;
-            w.callback?.(w.value);
-        }
+        queueCountInput.value = setWidgetValue(node, "queue_count", Math.max(0, parseInt(v) || 0));
     });
     settingsRow.appendChild(queueCountInput);
 
     // Shuffle
     settingsRow.appendChild(mkLabel("乱序:"));
     const shuffleCheckbox = mkCheckbox(getShuffleValue(node), (v) => {
-        const w = getWidgetByName(node, "shuffle");
-        if (w) {
-            w.value = v;
-            w.callback?.(w.value);
-        }
+        shuffleCheckbox.checked = setWidgetValue(node, "shuffle", v);
     });
     settingsRow.appendChild(shuffleCheckbox);
 
     // Allow Duplicate
     settingsRow.appendChild(mkLabel("允许重复:"));
     const dupCheckbox = mkCheckbox(getAllowDuplicateValue(node), (v) => {
-        const w = getWidgetByName(node, "allow_duplicate");
-        if (w) {
-            w.value = v;
-            w.callback?.(w.value);
-        }
+        dupCheckbox.checked = setWidgetValue(node, "allow_duplicate", v);
     });
     settingsRow.appendChild(dupCheckbox);
 
@@ -876,26 +870,10 @@ function createTextListUI(node) {
     });
     settingsRow.appendChild(seedInput);
 
-    // Queue Threshold
-    settingsRow.appendChild(mkLabel("队列阈值:"));
-    const thresholdInput = mkInput("number", getQueueThresholdValue(node), (v) => {
-        const w = getWidgetByName(node, "queue_threshold");
-        if (w) {
-            w.value = Math.max(1, Math.min(1000, parseInt(v) || 199));
-            w.callback?.(w.value);
-        }
-    });
-    thresholdInput.style.width = "50px";
-    settingsRow.appendChild(thresholdInput);
-
     // Check Interval
     settingsRow.appendChild(mkLabel("检查间隔ms:"));
     const intervalInput = mkInput("number", getCheckIntervalValue(node), (v) => {
-        const w = getWidgetByName(node, "check_interval_ms");
-        if (w) {
-            w.value = Math.max(100, Math.min(60000, parseInt(v) || 1000));
-            w.callback?.(w.value);
-        }
+        intervalInput.value = setWidgetValue(node, "check_interval_ms", Math.max(100, Math.min(60000, parseInt(v) || 1000)));
     });
     intervalInput.style.width = "60px";
     settingsRow.appendChild(intervalInput);
@@ -1224,7 +1202,11 @@ function createTextListUI(node) {
     // 初始化 UI 状态
     updateUIForSourceMode();
 
-    return { container, redraw, asyncRedraw };
+    return {
+        container,
+        redraw,
+        asyncRedraw,
+    };
 }
 
 app.registerExtension({
@@ -1245,19 +1227,20 @@ app.registerExtension({
             // 隐藏所有 widget，通过 UI 控制
             const hiddenWidgets = ["source_mode", "file_mode", "max_texts", "queue_count", "shuffle", "allow_duplicate", "seed", "trigger", "queue_threshold", "check_interval_ms"];
             for (const name of hiddenWidgets) {
+                if (name === "queue_threshold") continue;
                 const w = getWidgetByName(this, name);
                 if (w) {
                     w.type = "hidden";
                     w.computeSize = () => [0, -4];
-                    if (name === "queue_count" || name === "max_texts" || name === "seed" || name === "queue_threshold" || name === "check_interval_ms") {
+                    if (name === "queue_count" || name === "max_texts" || name === "seed" || name === "check_interval_ms") {
                         if (w.value === "" || w.value === null || w.value === undefined) {
-                            w.value = 0;
+                            w.value = name === "check_interval_ms" ? 1000 : 0;
                         }
                         const origSerialize = w.serializeValue;
                         w.serializeValue = async () => {
                             const v = origSerialize ? await origSerialize() : w.value;
                             const num = parseInt(v, 10);
-                            return isNaN(num) ? 0 : num;
+                            return isNaN(num) ? (name === "check_interval_ms" ? 1000 : 0) : num;
                         };
                     }
                     if (name === "source_mode" || name === "file_mode") {
@@ -1298,6 +1281,13 @@ app.registerExtension({
 
             ui.asyncRedraw();
 
+            return r;
+        };
+
+        const origOnConfigure = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function () {
+            const r = origOnConfigure?.apply(this, arguments);
+            this._batchLoadTextsUI?.asyncRedraw?.();
             return r;
         };
 

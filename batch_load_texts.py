@@ -88,7 +88,7 @@ class BatchLoadTexts:
                 "shuffle": ("BOOLEAN", {"default": False}),
                 "allow_duplicate": ("BOOLEAN", {"default": True}),
                 "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
-                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1, "forceInput": True}),
+                "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1}),
                 "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100, "forceInput": True}),
             }
         }

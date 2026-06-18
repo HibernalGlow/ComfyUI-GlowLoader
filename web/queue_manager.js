@@ -11,12 +11,39 @@ const QueueManager = {
     /** 当前是否正在入队 */
     _queuing: false,
 
+    /** FIFO 入队锁：保证 A 的补队循环结束后，B/C 才开始 */
+    _queueTail: Promise.resolve(),
+
     get aborted() {
         return this._aborted;
     },
 
     get queuing() {
         return this._queuing;
+    },
+
+    async runExclusive(task) {
+        let release;
+        const gate = new Promise((resolve) => {
+            release = resolve;
+        });
+        const previous = this._queueTail.catch(() => {});
+        this._queueTail = previous.then(() => gate);
+
+        await previous;
+        this.startQueuing();
+        try {
+            return await task();
+        } finally {
+            try {
+                if (!this._aborted) {
+                    await this.waitUntilIdle();
+                }
+            } finally {
+                this.endQueuing();
+                release();
+            }
+        }
     },
 
     /** 请求中止当前入队操作 */
@@ -47,6 +74,35 @@ const QueueManager = {
 
     getQueueSize() {
         return app.ui?.lastQueueSize || 0;
+    },
+
+    async getQueueCounts() {
+        try {
+            const resp = await api.fetchApi("/queue");
+            if (resp.ok) {
+                const json = await resp.json();
+                const pending = Array.isArray(json?.queue_pending) ? json.queue_pending.length : 0;
+                const running = Array.isArray(json?.queue_running) ? json.queue_running.length : 0;
+                return { pending, running, total: pending + running };
+            }
+        } catch (e) {
+            console.warn("[QueueManager] 获取队列状态失败，退回 lastQueueSize:", e);
+        }
+
+        const pending = this.getQueueSize();
+        return { pending, running: 0, total: pending };
+    },
+
+    async waitUntilIdle(checkInterval = 1000) {
+        while (!this._aborted) {
+            const counts = await this.getQueueCounts();
+            if (counts.total <= 0) {
+                return true;
+            }
+            console.log(`[QueueManager] 等待当前批次执行完毕 (pending=${counts.pending}, running=${counts.running})...`);
+            await new Promise(resolve => setTimeout(resolve, checkInterval));
+        }
+        return false;
     },
 
     async waitForSpace(threshold, checkInterval, targetSpace = 1) {
