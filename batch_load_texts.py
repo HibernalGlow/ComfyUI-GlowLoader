@@ -196,13 +196,20 @@ class BatchLoadTexts:
         return [e[0] for e in entries_with_names]
 
     def _load_from_files_with_names(self, text_list: str, file_mode):
-        file_mode = _normalize_combo(file_mode, ["one_per_file", "lines_per_file"], "one_per_file")
-        """从文件加载文本，返回 (文本, 文件名) 元组列表"""
-        entries = []
-        file_entries = [_parse_text_list_entry(x) for x in (text_list or "").splitlines()]
-        file_entries = [(c, p) for c, p in file_entries if c]
+        return [(text, filename) for text, filename, _ in self._load_from_files_with_names_and_indices(text_list, file_mode)]
 
-        for comfy_name, original_relpath in file_entries:
+    def _load_from_files_with_names_and_indices(self, text_list: str, file_mode):
+        file_mode = _normalize_combo(file_mode, ["one_per_file", "lines_per_file"], "one_per_file")
+        """从文件加载文本，返回 (文本, 文件名, text_list索引) 元组列表"""
+        entries = []
+        file_entries = []
+        for raw_entry in (text_list or "").splitlines():
+            comfy_name, original_relpath = _parse_text_list_entry(raw_entry)
+            if comfy_name:
+                source_index = len(file_entries)
+                file_entries.append((source_index, comfy_name, original_relpath))
+
+        for source_index, comfy_name, original_relpath in file_entries:
             if not folder_paths.exists_annotated_filepath(comfy_name):
                 continue
 
@@ -219,13 +226,13 @@ class BatchLoadTexts:
             if file_mode == "one_per_file":
                 # 整个文件作为一个 entry（保留原始空行/首尾空白）
                 if content.strip():
-                    entries.append((content, filename))
+                    entries.append((content, filename, source_index))
             else:
                 # 文件内每行作为一个 entry，每行都关联同一个文件名
                 for line in content.splitlines():
                     line = line.strip()
                     if line:
-                        entries.append((line, filename))
+                        entries.append((line, filename, source_index))
 
         return entries
 
@@ -326,18 +333,15 @@ class BatchLoadTexts:
         if mode == "single":
             if index < 0:
                 return "index must be >= 0"
-            # 当 allow_duplicate=True 时，index 可以超过 total，用于循环入队
-            # 所以只在 shuffle=False 且 allow_duplicate=False 时检查范围
-            if not shuffle and not allow_duplicate:
-                if index >= len(entries):
-                    return f"index out of range (0..{len(entries)-1})"
+            if index >= len(entries):
+                return f"index out of range (0..{len(entries)-1})"
 
         return True
 
     @classmethod
     def generate_queue_sequence(cls, source_mode: str, text_list: str, file_mode: str,
                                 max_texts: int, queue_count: int, shuffle: bool,
-                                allow_duplicate: bool, seed: int):
+                                allow_duplicate: bool, seed: int, excluded_indices=None):
         """生成入队序列，返回索引列表"""
 
         # 计算 entries 数量
@@ -354,15 +358,28 @@ class BatchLoadTexts:
             entries = entries[:max_texts]
 
         total_entries = len(entries)
+        excluded = set()
+        for value in excluded_indices or []:
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= value < total_entries:
+                excluded.add(value)
+
+        if excluded:
+            indices = [i for i in range(total_entries) if i not in excluded]
+            if not indices:
+                return []
+        else:
+            indices = list(range(total_entries))
 
         # 确定实际入队次数
-        count = queue_count if queue_count > 0 else total_entries
+        count = queue_count if queue_count > 0 else len(indices)
 
         # 确定实际使用的种子
         effective_seed = seed if seed >= 0 else random.randint(0, 2147483647)
         rng = random.Random(effective_seed)
-
-        indices = list(range(total_entries))
 
         if shuffle:
             # 乱序模式
@@ -374,19 +391,19 @@ class BatchLoadTexts:
                 result = []
                 rng.shuffle(indices)
                 for i in range(count):
-                    result.append(indices[i % total_entries])
-                    if i % total_entries == total_entries - 1:
+                    result.append(indices[i % len(indices)])
+                    if i % len(indices) == len(indices) - 1:
                         # 一轮结束，重新打乱
                         rng.shuffle(indices)
                 return result
         else:
             # 顺序模式
             if allow_duplicate:
-                # 允许重复：循环使用，返回实际索引值以便后端计算 loop_index
-                return list(range(count))
+                # 允许重复：循环使用可用索引
+                return [indices[i % len(indices)] for i in range(count)]
             else:
                 # 不允许重复：只取前count个（不超过总数）
-                return indices[:min(count, total_entries)]
+                return indices[:min(count, len(indices))]
 
     @classmethod
     def _load_entries_for_sequence(cls, text_list: str, file_mode):

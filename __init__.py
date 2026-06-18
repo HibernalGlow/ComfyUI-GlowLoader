@@ -265,18 +265,22 @@ if PromptServer is not None:
             if source_mode == "direct":
                 entries = [x.strip() for x in (text_list or "").splitlines() if x.strip()]
                 filenames = ["" for _ in entries]
+                source_indices = list(range(len(entries)))
             else:
-                entries_with_files = BatchLoadTexts()._load_from_files_with_names(text_list, file_mode)
+                entries_with_files = BatchLoadTexts()._load_from_files_with_names_and_indices(text_list, file_mode)
                 entries = [e[0] for e in entries_with_files]
                 filenames = [e[1] for e in entries_with_files]
+                source_indices = [e[2] for e in entries_with_files]
 
             if max_texts and max_texts > 0:
                 entries = entries[:max_texts]
                 filenames = filenames[:max_texts]
+                source_indices = source_indices[:max_texts]
 
             return web.json_response({
                 "entries": entries,
                 "filenames": filenames,
+                "source_indices": source_indices,
             })
         except Exception as e:
             return web.json_response(
@@ -297,6 +301,7 @@ if PromptServer is not None:
                 data.get("shuffle", False),
                 data.get("allow_duplicate", True),
                 data.get("seed", -1),
+                data.get("excluded_indices", None),
             )
             return web.json_response({"sequence": sequence})
         except Exception as e:

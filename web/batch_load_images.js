@@ -202,6 +202,31 @@ function getWidgetByName(node, name) {
     return node?.widgets?.find((w) => w.name === name);
 }
 
+const IMAGE_WIDGET_LABELS = {
+    image_list: "图片列表",
+    max_images: "最大图片数",
+    mode: "模式",
+    index: "索引",
+    seed: "种子",
+    queue_count: "入队次数",
+    shuffle: "乱序",
+    allow_duplicate: "允许重复",
+    queue_threshold: "队列阈值",
+    check_interval_ms: "检查间隔ms",
+    trigger: "触发",
+};
+
+function localizeStandardWidgets(node) {
+    for (const w of node?.widgets || []) {
+        const label = IMAGE_WIDGET_LABELS[w.name];
+        if (label) w.label = label;
+    }
+    for (const input of node?.inputs || []) {
+        const label = IMAGE_WIDGET_LABELS[input.name] || IMAGE_WIDGET_LABELS[input.widget?.name];
+        if (label) input.label = label;
+    }
+}
+
 function readIntWidget(node, name, defaultValue, min, max) {
     const w = getWidgetByName(node, name);
     let v = parseInt(w?.value, 10);
@@ -1028,6 +1053,7 @@ app.registerExtension({
         const origOnNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = origOnNodeCreated?.apply(this, arguments);
+            localizeStandardWidgets(this);
 
             const imageListWidget = getImageListWidget(this);
             if (imageListWidget) {
@@ -1080,6 +1106,7 @@ app.registerExtension({
         const origOnConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             const r = origOnConfigure?.apply(this, arguments);
+            localizeStandardWidgets(this);
             this._batchLoadImagesUI?.redraw?.();
             restoreBatchStatus(this);
             return r;

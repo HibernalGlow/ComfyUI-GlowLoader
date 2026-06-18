@@ -34,6 +34,7 @@ function parseTextList(text) {
 function setTextList(node, texts) {
     const w = getTextListWidget(node);
     if (!w) return;
+    clearExcludedTextIndices(node);
     const value = (texts || []).join("\n");
     console.log(`[BatchLoadTexts] setTextList - 写入 ${texts?.length || 0} 个条目`);
     w.value = value;
@@ -44,6 +45,51 @@ function setTextList(node, texts) {
         w.inputEl.dispatchEvent(new Event("change", { bubbles: true }));
     }
     w.callback?.(value);
+}
+
+const EXCLUDED_TEXT_INDICES_PROP = "glowloader_excluded_text_indices";
+
+function getTextExclusionSignature(node) {
+    return JSON.stringify({
+        source_mode: getSourceModeValue(node),
+        file_mode: getFileModeValue(node),
+        text_list: getTextListWidget(node)?.value || "",
+    });
+}
+
+function getExcludedTextIndices(node) {
+    const state = node?.properties?.[EXCLUDED_TEXT_INDICES_PROP];
+    if (!state || state.signature !== getTextExclusionSignature(node)) return [];
+    return Array.from(
+        new Set((state.indices || []).map((x) => parseInt(x, 10)).filter((x) => Number.isInteger(x) && x >= 0))
+    );
+}
+
+function setExcludedTextIndices(node, indices) {
+    if (!node) return;
+    node.properties = node.properties || {};
+    const next = Array.from(
+        new Set((indices || []).map((x) => parseInt(x, 10)).filter((x) => Number.isInteger(x) && x >= 0))
+    ).sort((a, b) => a - b);
+    if (next.length === 0) {
+        delete node.properties[EXCLUDED_TEXT_INDICES_PROP];
+    } else {
+        node.properties[EXCLUDED_TEXT_INDICES_PROP] = {
+            signature: getTextExclusionSignature(node),
+            indices: next,
+        };
+    }
+    app.graph.setDirtyCanvas(true, true);
+}
+
+function addExcludedTextIndex(node, index) {
+    setExcludedTextIndices(node, [...getExcludedTextIndices(node), index]);
+}
+
+function clearExcludedTextIndices(node) {
+    if (node?.properties?.[EXCLUDED_TEXT_INDICES_PROP]) {
+        delete node.properties[EXCLUDED_TEXT_INDICES_PROP];
+    }
 }
 
 function getMaxTextsValue(node) {
@@ -84,6 +130,43 @@ function getCheckIntervalValue(node) {
 
 function getWidgetByName(node, name) {
     return node?.widgets?.find((w) => w.name === name);
+}
+
+const TEXT_WIDGET_LABELS = {
+    source_mode: "数据源",
+    file_mode: "文件解析",
+    max_texts: "最大文本数",
+    mode: "模式",
+    index: "索引",
+    seed: "种子",
+    queue_count: "入队次数",
+    shuffle: "乱序",
+    allow_duplicate: "允许重复",
+    queue_threshold: "队列阈值",
+    check_interval_ms: "检查间隔ms",
+    trigger: "触发",
+};
+
+function localizeStandardWidgets(node) {
+    for (const w of node?.widgets || []) {
+        const label = TEXT_WIDGET_LABELS[w.name];
+        if (label) w.label = label;
+    }
+    for (const input of node?.inputs || []) {
+        const label = TEXT_WIDGET_LABELS[input.name] || TEXT_WIDGET_LABELS[input.widget?.name];
+        if (label) input.label = label;
+    }
+}
+
+function moveWidgetAfter(node, name, afterName) {
+    const widgets = node?.widgets;
+    if (!widgets) return;
+    const from = widgets.findIndex((w) => w.name === name);
+    const after = widgets.findIndex((w) => w.name === afterName);
+    if (from < 0 || after < 0 || from === after + 1) return;
+    const [widget] = widgets.splice(from, 1);
+    const nextAfter = widgets.findIndex((w) => w.name === afterName);
+    widgets.splice(nextAfter + 1, 0, widget);
 }
 
 function readIntWidget(node, name, defaultValue, min, max) {
@@ -193,6 +276,7 @@ async function generateQueueSequence(node) {
             shuffle: shuffle,
             allow_duplicate: allowDuplicate,
             seed: seed,
+            excluded_indices: getExcludedTextIndices(node),
         }),
     });
 
@@ -249,6 +333,7 @@ async function generateSequenceForNode(targetNode, stepCount) {
                 shuffle: shuffle,
                 allow_duplicate: allowDuplicate,
                 seed: seed,
+                excluded_indices: getExcludedTextIndices(targetNode),
             }),
         });
         if (resp.ok) {
@@ -914,6 +999,7 @@ function createTextListUI(node) {
             setTextList(node, []);
             selectedIndex = -1;
             expandedEntries = null;
+            expandedSourceIndices = null;
             redraw();
         }
     };
@@ -946,6 +1032,7 @@ function createTextListUI(node) {
     let selectedIndex = -1;
     // 缓存展开后的条目（文件模式下从后端获取）
     let expandedEntries = null; // null 表示未加载，数组表示展开结果
+    let expandedSourceIndices = null; // 每个展开条目对应的 text_list 源索引
     let expandVersion = 0; // 用于取消过期的异步请求
 
     // 从后端获取展开后的条目
@@ -953,6 +1040,7 @@ function createTextListUI(node) {
         const sourceMode = getSourceModeValue(node);
         if (sourceMode !== "files") {
             expandedEntries = null;
+            expandedSourceIndices = null;
             return;
         }
         const textList = getTextListWidget(node)?.value || "";
@@ -977,22 +1065,35 @@ function createTextListUI(node) {
             const json = await resp.json();
             console.log(`[BatchLoadTexts] fetchExpandedEntries - 返回 ${json.entries?.length || 0} 个条目`);
             expandedEntries = json.entries || [];
+            expandedSourceIndices = json.source_indices || expandedEntries.map((_, index) => index);
         } catch (e) {
             console.warn("[BatchLoadTexts] 获取展开条目失败:", e);
             expandedEntries = null;
+            expandedSourceIndices = null;
         }
     };
 
-    // 获取当前显示用的条目列表
-    const getDisplayEntries = () => {
+    // 获取当前显示用的条目列表，保留原始索引用于文件模式排除。
+    const getDisplayItems = () => {
         const sourceMode = getSourceModeValue(node);
         if (sourceMode === "files" && expandedEntries && expandedEntries.length > 0) {
-            console.log(`[BatchLoadTexts] getDisplayEntries - 使用展开条目: ${expandedEntries.length} 个`);
-            return expandedEntries;
+            const excluded = new Set(getExcludedTextIndices(node));
+            console.log(`[BatchLoadTexts] getDisplayEntries - 使用展开条目: ${expandedEntries.length} 个，排除 ${excluded.size} 个`);
+            return expandedEntries
+                .map((text, index) => ({
+                    text,
+                    originalIndex: index,
+                    sourceIndex: expandedSourceIndices?.[index] ?? index,
+                }))
+                .filter((item) => !excluded.has(item.originalIndex));
         }
         const raw = parseTextList(getTextListWidget(node)?.value);
         console.log(`[BatchLoadTexts] getDisplayEntries - 使用原始列表: ${raw.length} 个, sourceMode: ${sourceMode}, expandedEntries: ${expandedEntries ? expandedEntries.length : 'null'}`);
-        return raw;
+        return raw.map((text, index) => ({ text, originalIndex: index }));
+    };
+
+    const getDisplayEntries = () => {
+        return getDisplayItems().map((item) => item.text);
     };
 
     const updateInfo = () => {
@@ -1014,7 +1115,8 @@ function createTextListUI(node) {
 
     const redraw = () => {
         const sourceMode = getSourceModeValue(node);
-        const entries = getDisplayEntries();
+        const items = getDisplayItems();
+        const entries = items.map((item) => item.text);
         console.log(`[BatchLoadTexts] redraw - 列表总数: ${entries.length}, sourceMode: ${sourceMode}`);
         listContainer.innerHTML = "";
 
@@ -1031,7 +1133,8 @@ function createTextListUI(node) {
         }
 
         const frag = document.createDocumentFragment();
-        entries.forEach((text, idx) => {
+        items.forEach((itemData, idx) => {
+            const text = itemData.text;
             const item = document.createElement("div");
             const isSelected = idx === selectedIndex;
             item.style.cssText = `
@@ -1062,27 +1165,47 @@ function createTextListUI(node) {
                     "flex:1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
             }
 
-            // 文件模式下不允许删除展开后的单行条目
-            if (sourceMode !== "files") {
-                const del = document.createElement("button");
-                del.textContent = "×";
-                del.title = "删除";
-                del.style.cssText =
-                    "width:20px;height:20px;background:rgba(255,0,0,0.75);color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:16px;line-height:1;";
-                del.onclick = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
+            const del = document.createElement("button");
+            del.textContent = "×";
+            del.title = "删除";
+            del.style.cssText =
+                "width:20px;height:20px;min-width:20px;background:rgba(255,0,0,0.75);color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:16px;line-height:1;";
+            del.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (sourceMode === "files" && expandedEntries && expandedEntries.length > 0) {
+                    const rawEntries = parseTextList(getTextListWidget(node)?.value);
+                    if (itemData.sourceIndex >= 0 && itemData.sourceIndex < rawEntries.length) {
+                        rawEntries.splice(itemData.sourceIndex, 1);
+                        setTextList(node, rawEntries);
+                        expandedEntries = null;
+                        expandedSourceIndices = null;
+                    } else {
+                        addExcludedTextIndex(node, itemData.originalIndex);
+                    }
+                    if (selectedIndex === idx) {
+                        selectedIndex = -1;
+                    } else if (selectedIndex > idx) {
+                        selectedIndex--;
+                    }
+                    asyncRedraw();
+                } else {
+                    const rawEntries = parseTextList(getTextListWidget(node)?.value);
                     const next = entries.slice(0, idx).concat(entries.slice(idx + 1));
-                    setTextList(node, next);
+                    if (itemData.originalIndex >= 0 && itemData.originalIndex < rawEntries.length) {
+                        rawEntries.splice(itemData.originalIndex, 1);
+                        setTextList(node, rawEntries);
+                    } else {
+                        setTextList(node, next);
+                    }
                     if (selectedIndex === idx) {
                         selectedIndex = -1;
                     } else if (selectedIndex > idx) {
                         selectedIndex--;
                     }
                     redraw();
-                };
-                item.appendChild(del);
-            }
+                }
+            };
 
             item.onclick = () => {
                 selectedIndex = idx;
@@ -1091,6 +1214,7 @@ function createTextListUI(node) {
 
             item.appendChild(num);
             item.appendChild(content);
+            item.appendChild(del);
             frag.appendChild(item);
         });
 
@@ -1194,6 +1318,8 @@ app.registerExtension({
         const origOnNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const r = origOnNodeCreated?.apply(this, arguments);
+            localizeStandardWidgets(this);
+            moveWidgetAfter(this, "source_mode", "file_mode");
 
             const textListWidget = getTextListWidget(this);
             if (textListWidget) {
@@ -1257,6 +1383,8 @@ app.registerExtension({
         const origOnConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             const r = origOnConfigure?.apply(this, arguments);
+            localizeStandardWidgets(this);
+            moveWidgetAfter(this, "source_mode", "file_mode");
             this._batchLoadTextsUI?.updateMode?.();
             this._batchLoadTextsUI?.asyncRedraw?.();
             restoreBatchStatus(this);
