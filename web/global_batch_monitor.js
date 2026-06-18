@@ -2,7 +2,7 @@ import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 import { QueueManager } from "./queue_manager.js";
 
-const DONE_STATUSES = new Set(["completed", "cancelled", "error"]);
+const DONE_STATUSES = new Set(["completed", "cancelled", "error", "paused"]);
 
 function clampPercent(value) {
     if (!Number.isFinite(value)) return 0;
@@ -20,6 +20,7 @@ function statusText(status) {
         completed: "完成",
         cancelled: "取消",
         error: "错误",
+        paused: "暂停",
         "准备中": "准备",
     };
     return map[status] || status || "-";
@@ -57,7 +58,7 @@ function getLocalPreparingBatches() {
     const result = [];
     for (const node of nodes) {
         const status = node?._glowloaderBatchStatus || node?.properties?.glowloader_last_batch;
-        if (!status || status.batch_id || status.status !== "准备中") continue;
+        if (!status || status.batch_id || !["准备中", "paused"].includes(status.status)) continue;
         result.push({
             ...status,
             node_id: status.node_id || String(node.id ?? ""),
@@ -222,10 +223,31 @@ const monitor = {
                 border-top: 1px solid rgba(255,255,255,0.1);
             }
             .glowloader-workflow-title {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
                 font-size: 12px;
                 font-weight: 600;
                 margin-bottom: 8px;
                 color: #fff;
+            }
+            .glowloader-action-btn {
+                border: 1px solid rgba(255,255,255,0.18);
+                background: rgba(255,255,255,0.08);
+                color: inherit;
+                border-radius: 5px;
+                padding: 3px 7px;
+                cursor: pointer;
+                font-size: 11px;
+                white-space: nowrap;
+            }
+            .glowloader-action-btn:hover {
+                background: rgba(255,255,255,0.14);
+            }
+            .glowloader-action-btn:disabled {
+                opacity: 0.45;
+                cursor: default;
             }
             .glowloader-batch-row {
                 padding: 8px;
@@ -264,6 +286,7 @@ const monitor = {
             }
             .glowloader-progress-bar.done { background: #64d27b; }
             .glowloader-progress-bar.error { background: #ff6565; }
+            .glowloader-progress-bar.paused { background: #d6a85b; }
         `;
         document.head.appendChild(style);
     },
@@ -285,6 +308,38 @@ const monitor = {
             this.batches = mergeBatches([], getLocalPreparingBatches());
         }
         this.render();
+    },
+
+    hasLocalPreparingWorkflow(workflowId) {
+        return getLocalPreparingBatches().some((batch) => String(batch.workflow_id || "") === String(workflowId || ""));
+    },
+
+    async pauseBatch(batch) {
+        if (!batch || !isActive(batch)) return;
+        if (!batch.batch_id && batch.status === "准备中") {
+            QueueManager.abortLocal?.();
+            await this.refresh();
+            return;
+        }
+        try {
+            await QueueManager.pauseBatch(batch.batch_id);
+        } catch (e) {
+            console.warn("[GlowLoader] 暂停批次失败:", e);
+        }
+        await this.refresh();
+    },
+
+    async pauseWorkflow(workflowId) {
+        if (!workflowId) return;
+        if (this.hasLocalPreparingWorkflow(workflowId)) {
+            QueueManager.abortLocal?.();
+        }
+        try {
+            await QueueManager.pauseWorkflow(workflowId);
+        } catch (e) {
+            console.warn("[GlowLoader] 暂停工作流批次失败:", e);
+        }
+        await this.refresh();
     },
 
     render() {
@@ -319,7 +374,20 @@ const monitor = {
             const title = document.createElement("div");
             title.className = "glowloader-workflow-title";
             const activeCount = batches.filter(isActive).length;
-            title.textContent = `${workflow} · ${activeCount} 活跃 / ${batches.length} 批次`;
+            const titleText = document.createElement("span");
+            titleText.textContent = `${workflow} · ${activeCount} 活跃 / ${batches.length} 批次`;
+            const workflowId = batches.find((batch) => batch.workflow_id)?.workflow_id;
+            const pauseBtn = document.createElement("button");
+            pauseBtn.className = "glowloader-action-btn";
+            pauseBtn.type = "button";
+            pauseBtn.textContent = "暂停入队";
+            pauseBtn.disabled = activeCount === 0 || !workflowId;
+            pauseBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.pauseWorkflow(workflowId);
+            };
+            title.appendChild(titleText);
+            title.appendChild(pauseBtn);
             group.appendChild(title);
 
             for (const batch of batches) {
@@ -338,7 +406,13 @@ const monitor = {
         const percent = total > 0 ? clampPercent((completed / total) * 100) : 0;
         const queue = batch.queue || {};
         const nodeLabel = batch.node_title || batch.label || `节点 ${batch.node_id || "-"}`;
-        const barClass = batch.status === "completed" ? "done" : batch.status === "error" ? "error" : "";
+        const barClass = batch.status === "completed"
+            ? "done"
+            : batch.status === "error"
+                ? "error"
+                : batch.status === "paused"
+                    ? "paused"
+                    : "";
 
         row.innerHTML = `
             <div class="glowloader-batch-top">
@@ -351,6 +425,23 @@ const monitor = {
             </div>
             <div class="glowloader-progress-track"><div class="glowloader-progress-bar ${barClass}" style="width:${percent}%"></div></div>
         `;
+        if (isActive(batch)) {
+            const actions = document.createElement("div");
+            actions.className = "glowloader-batch-meta";
+            const hint = document.createElement("span");
+            hint.textContent = batch.batch_id ? "暂停后只停止继续入队" : "停止当前准备";
+            const pause = document.createElement("button");
+            pause.className = "glowloader-action-btn";
+            pause.type = "button";
+            pause.textContent = "暂停";
+            pause.onclick = (e) => {
+                e.stopPropagation();
+                this.pauseBatch(batch);
+            };
+            actions.appendChild(hint);
+            actions.appendChild(pause);
+            row.appendChild(actions);
+        }
         if (batch.current_index !== undefined && batch.current_index !== null) {
             const meta = document.createElement("div");
             meta.className = "glowloader-batch-meta";

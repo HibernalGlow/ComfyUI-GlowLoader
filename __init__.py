@@ -66,6 +66,7 @@ class GlowBatchCoordinator:
             "created_at": batch.get("created_at"),
             "started_at": batch.get("started_at"),
             "completed_at": batch.get("completed_at"),
+            "paused_at": batch.get("paused_at"),
         }
 
     async def submit(self, request, data):
@@ -103,7 +104,9 @@ class GlowBatchCoordinator:
             "created_at": time.time(),
             "started_at": None,
             "completed_at": None,
+            "paused_at": None,
             "cancelled": False,
+            "paused": False,
         }
 
         self._ensure_lock()
@@ -141,6 +144,26 @@ class GlowBatchCoordinator:
                 batch["status"] = "cancelled"
                 cancelled.append(batch["batch_id"])
         return cancelled
+
+    async def pause(self, batch_id=None, node_id=None, workflow_id=None):
+        import time
+        self._ensure_lock()
+        paused = []
+        async with self.lock:
+            for batch in self.batches:
+                if batch["status"] in ("completed", "cancelled", "error", "paused"):
+                    continue
+                if batch_id and batch["batch_id"] != batch_id:
+                    continue
+                if node_id is not None and batch.get("node_id") != str(node_id):
+                    continue
+                if workflow_id is not None and batch.get("workflow_id") != str(workflow_id):
+                    continue
+                batch["paused"] = True
+                batch["status"] = "paused"
+                batch["paused_at"] = time.time()
+                paused.append(batch["batch_id"])
+        return paused
 
     async def _queue_counts(self, session, base_url):
         try:
@@ -204,6 +227,9 @@ class GlowBatchCoordinator:
             if batch.get("cancelled"):
                 batch["status"] = "cancelled"
                 return
+            if batch.get("paused"):
+                batch["status"] = "paused"
+                return
 
             counts = await self._queue_counts(session, batch["base_url"])
             batch["queue_counts"] = counts
@@ -213,6 +239,12 @@ class GlowBatchCoordinator:
                 continue
 
             for _ in range(min(capacity, len(batch["prompts"]) - batch["submitted"])):
+                if batch.get("cancelled"):
+                    batch["status"] = "cancelled"
+                    return
+                if batch.get("paused"):
+                    batch["status"] = "paused"
+                    return
                 prompt_data = batch["prompts"][batch["submitted"]]
                 prompt_id = await self._post_prompt(session, batch, prompt_data)
                 batch["prompt_ids"].append(prompt_id)
@@ -221,6 +253,9 @@ class GlowBatchCoordinator:
         while batch["completed"] < len(batch["prompt_ids"]):
             if batch.get("cancelled"):
                 batch["status"] = "cancelled"
+                return
+            if batch.get("paused"):
+                batch["status"] = "paused"
                 return
 
             completed = 0
@@ -352,6 +387,19 @@ if PromptServer is not None:
                 node_id=data.get("node_id"),
             )
             return web.json_response({"cancelled": cancelled})
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    @PromptServer.instance.routes.post("/glowloader/batch/pause")
+    async def api_batch_pause(request):
+        try:
+            data = await request.json()
+            paused = await _glow_batch_coordinator.pause(
+                batch_id=data.get("batch_id"),
+                node_id=data.get("node_id"),
+                workflow_id=data.get("workflow_id"),
+            )
+            return web.json_response({"paused": paused})
         except Exception as e:
             return web.json_response({"error": str(e)}, status=500)
 

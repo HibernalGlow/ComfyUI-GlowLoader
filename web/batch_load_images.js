@@ -313,7 +313,7 @@ async function restoreBatchStatus(node) {
         const status = await QueueManager.getBatchStatus(batchId);
         if (status) {
             setBatchStatus(node, status);
-            if (!["completed", "cancelled", "error"].includes(status.status)) {
+            if (!["completed", "cancelled", "error", "paused"].includes(status.status)) {
                 QueueManager.watchBatch(status.batch_id, (next) => setBatchStatus(node, next));
             }
         }

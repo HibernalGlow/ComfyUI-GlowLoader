@@ -225,7 +225,7 @@ async function restoreBatchStatus(node) {
         const status = await QueueManager.getBatchStatus(batchId);
         if (status) {
             setBatchStatus(node, status);
-            if (!["completed", "cancelled", "error"].includes(status.status)) {
+            if (!["completed", "cancelled", "error", "paused"].includes(status.status)) {
                 QueueManager.watchBatch(status.batch_id, (next) => setBatchStatus(node, next));
             }
         }
@@ -292,6 +292,25 @@ async function updatePrepareStatus(node, label, completed, total, currentIndex =
         prompt_ids: [],
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function setLocalPausedStatus(node, label, completed, total, currentIndex = null) {
+    const workflow = QueueManager.getWorkflowInfo?.() || {};
+    setBatchStatus(node, {
+        batch_id: null,
+        node_id: String(node?.id ?? ""),
+        node_title: node?.title || node?.type || "",
+        workflow_id: workflow.id || "current",
+        workflow_label: workflow.label || "当前工作流",
+        label,
+        status: "paused",
+        threshold: getQueueThresholdValue(node),
+        submitted: 0,
+        total,
+        completed,
+        current_index: currentIndex,
+        prompt_ids: [],
+    });
 }
 
 // deepClone 委托给 QueueManager
@@ -504,6 +523,10 @@ async function queueAllSequential(node) {
         QueueManager.invalidatePromptCache();
     }
 
+    if (QueueManager.aborted) {
+        setLocalPausedStatus(node, "逐行入队", prompts.length, sequence.length, sequence[Math.max(0, prompts.length - 1)] ?? null);
+        return;
+    }
     if (prompts.length === 0) return;
     return submitPromptBatch(node, "逐行入队", prompts);
 }
@@ -630,6 +653,10 @@ async function queueAllShuffled(node) {
         QueueManager.invalidatePromptCache();
     }
 
+    if (QueueManager.aborted) {
+        setLocalPausedStatus(node, "乱序入队", prompts.length, sequence.length, sequence[Math.max(0, prompts.length - 1)] ?? null);
+        return;
+    }
     if (prompts.length === 0) return;
     return submitPromptBatch(node, "乱序入队", prompts);
 }

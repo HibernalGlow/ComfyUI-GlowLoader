@@ -35,6 +35,10 @@ const QueueManager = {
         this._aborted = false;
     },
 
+    abortLocal() {
+        this._aborted = true;
+    },
+
     async getPrompt() {
         const now = Date.now();
         if (this._cachedPrompt && now - this._cacheExpiry < 500) {
@@ -165,6 +169,26 @@ const QueueManager = {
         return json?.batches?.[0] || null;
     },
 
+    async pauseBatch(batchId) {
+        const resp = await api.fetchApi("/glowloader/batch/pause", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ batch_id: batchId }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        return await resp.json();
+    },
+
+    async pauseWorkflow(workflowId) {
+        const resp = await api.fetchApi("/glowloader/batch/pause", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workflow_id: workflowId }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        return await resp.json();
+    },
+
     watchBatch(batchId, onUpdate) {
         let stopped = false;
         const tick = async () => {
@@ -173,7 +197,7 @@ const QueueManager = {
                 const status = await this.getBatchStatus(batchId);
                 if (status) {
                     onUpdate?.(status);
-                    if (["completed", "cancelled", "error"].includes(status.status)) return;
+                    if (["completed", "cancelled", "error", "paused"].includes(status.status)) return;
                 }
             } catch (e) {
                 console.warn("[QueueManager] 批次状态查询失败:", e);
