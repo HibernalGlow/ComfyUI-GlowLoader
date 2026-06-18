@@ -737,7 +737,7 @@ function createTextListUI(node) {
     container.style.cssText =
         "width:100%;padding:8px;background:var(--comfy-menu-bg);border:1px solid var(--border-color);border-radius:6px;margin:5px 0;pointer-events:auto;";
 
-    // 源模式选择
+    // 源模式选择（保留内部控件用于拖拽切换，实际显示走 ComfyUI 标准 widget）
     const sourceModeRow = document.createElement("div");
     sourceModeRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;align-items:center;";
     
@@ -832,74 +832,12 @@ function createTextListUI(node) {
     fileBtnRow.appendChild(selectFolderBtn);
     fileBtnRow.appendChild(addFilesBtn);
 
-    // 设置区域
-    const settingsRow = document.createElement("div");
-    settingsRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center;";
-
     const mkLabel = (text) => {
         const span = document.createElement("span");
         span.textContent = text;
         span.style.cssText = "font-size:11px;opacity:0.8;";
         return span;
     };
-
-    const mkInput = (type, value, onChange) => {
-        const input = document.createElement("input");
-        input.type = type;
-        input.value = value;
-        input.style.cssText = "width:60px;padding:4px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;font-size:12px;";
-        input.onchange = (e) => onChange?.(e.target.value);
-        return input;
-    };
-
-    const mkCheckbox = (checked, onChange) => {
-        const input = document.createElement("input");
-        input.type = "checkbox";
-        input.checked = checked;
-        input.style.cssText = "cursor:pointer;";
-        input.onchange = (e) => onChange?.(e.target.checked);
-        return input;
-    };
-
-    // Queue Count
-    settingsRow.appendChild(mkLabel("入队次数:"));
-    const queueCountInput = mkInput("number", getQueueCountValue(node) || 0, (v) => {
-        queueCountInput.value = setWidgetValue(node, "queue_count", Math.max(0, parseInt(v) || 0));
-    });
-    settingsRow.appendChild(queueCountInput);
-
-    // Shuffle
-    settingsRow.appendChild(mkLabel("乱序:"));
-    const shuffleCheckbox = mkCheckbox(getShuffleValue(node), (v) => {
-        shuffleCheckbox.checked = setWidgetValue(node, "shuffle", v);
-    });
-    settingsRow.appendChild(shuffleCheckbox);
-
-    // Allow Duplicate
-    settingsRow.appendChild(mkLabel("允许重复:"));
-    const dupCheckbox = mkCheckbox(getAllowDuplicateValue(node), (v) => {
-        dupCheckbox.checked = setWidgetValue(node, "allow_duplicate", v);
-    });
-    settingsRow.appendChild(dupCheckbox);
-
-    // Seed
-    settingsRow.appendChild(mkLabel("种子:"));
-    const seedInput = mkInput("number", getSeedValue(node), (v) => {
-        const w = getWidgetByName(node, "seed");
-        if (w) {
-            w.value = parseInt(v) || -1;
-            w.callback?.(w.value);
-        }
-    });
-    settingsRow.appendChild(seedInput);
-
-    // Check Interval
-    settingsRow.appendChild(mkLabel("检查间隔ms:"));
-    const intervalInput = mkInput("number", getCheckIntervalValue(node), (v) => {
-        intervalInput.value = setWidgetValue(node, "check_interval_ms", Math.max(100, Math.min(60000, parseInt(v) || 1000)));
-    });
-    intervalInput.style.width = "60px";
-    settingsRow.appendChild(intervalInput);
 
     // 直接输入模式按钮
     const directBtnRow = document.createElement("div");
@@ -1174,6 +1112,8 @@ function createTextListUI(node) {
     // 根据源模式更新 UI
     const updateUIForSourceMode = () => {
         const sourceMode = getSourceModeValue(node);
+        sourceModeSelect.value = sourceMode;
+        fileModeSelect.value = getFileModeValue(node);
         if (sourceMode === "files") {
             fileModeRow.style.display = "flex";
             fileBtnRow.style.display = "flex";
@@ -1225,10 +1165,8 @@ function createTextListUI(node) {
         asyncRedraw();
     });
 
-    container.appendChild(sourceModeRow);
-    container.appendChild(fileModeRow);
+    // source_mode / file_mode / 入队参数使用 ComfyUI 标准 widget 显示。
     container.appendChild(fileBtnRow);
-    container.appendChild(settingsRow);
     container.appendChild(directBtnRow);
     container.appendChild(queueBtnRow);
     container.appendChild(batchInfo);
@@ -1244,6 +1182,7 @@ function createTextListUI(node) {
         redraw,
         asyncRedraw,
         updateBatchStatus,
+        updateMode: updateUIForSourceMode,
     };
 }
 
@@ -1262,36 +1201,13 @@ app.registerExtension({
                 textListWidget.computeSize = () => [0, -4];
             }
 
-            // 隐藏所有 widget，通过 UI 控制
-            const hiddenWidgets = ["source_mode", "file_mode", "max_texts", "queue_count", "shuffle", "allow_duplicate", "seed", "trigger", "queue_threshold", "check_interval_ms"];
+            // 只隐藏 trigger；其他配置全部交回 ComfyUI 标准 widget。
+            const hiddenWidgets = ["trigger"];
             for (const name of hiddenWidgets) {
-                if (name === "queue_threshold") continue;
                 const w = getWidgetByName(this, name);
                 if (w) {
                     w.type = "hidden";
                     w.computeSize = () => [0, -4];
-                    if (name === "queue_count" || name === "max_texts" || name === "seed" || name === "check_interval_ms") {
-                        if (w.value === "" || w.value === null || w.value === undefined) {
-                            w.value = name === "check_interval_ms" ? 1000 : 0;
-                        }
-                        const origSerialize = w.serializeValue;
-                        w.serializeValue = async () => {
-                            const v = origSerialize ? await origSerialize() : w.value;
-                            const num = parseInt(v, 10);
-                            return isNaN(num) ? (name === "check_interval_ms" ? 1000 : 0) : num;
-                        };
-                    }
-                    if (name === "source_mode" || name === "file_mode") {
-                        const _w = w;
-                        const origSerialize = w.serializeValue;
-                        w.serializeValue = async () => {
-                            if (origSerialize) {
-                                const v = await origSerialize();
-                                if (typeof v === "string" && v) return v;
-                            }
-                            return String(_w.value || "");
-                        };
-                    }
                 }
             }
 
@@ -1300,6 +1216,21 @@ app.registerExtension({
             this._batchLoadTextsUI = ui;
             this.addDOMWidget("batch_load_texts", "customwidget", ui.container);
             this.setSize([500, 520]);
+
+            for (const name of ["source_mode", "file_mode"]) {
+                const w = getWidgetByName(this, name);
+                if (!w || w._glowloaderStandardCallbackInstalled) continue;
+                w._glowloaderStandardCallbackInstalled = true;
+                const origCallback = w.callback;
+                w.callback = function (value) {
+                    origCallback?.call(this, value);
+                    if (name === "source_mode") {
+                        ui.updateMode?.();
+                    } else {
+                        ui.asyncRedraw?.();
+                    }
+                };
+            }
 
             // Keep the DOM list in sync if something else changes the widget.
             const _node = this;
@@ -1326,6 +1257,7 @@ app.registerExtension({
         const origOnConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             const r = origOnConfigure?.apply(this, arguments);
+            this._batchLoadTextsUI?.updateMode?.();
             this._batchLoadTextsUI?.asyncRedraw?.();
             restoreBatchStatus(this);
             return r;

@@ -108,13 +108,13 @@ class BatchLoadImages:
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
             },
             "optional": {
-                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "control_after_generate": True, "forceInput": True}),
+                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "control_after_generate": True}),
                 "queue_count": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "shuffle": ("BOOLEAN", {"default": False}),
                 "allow_duplicate": ("BOOLEAN", {"default": True}),
                 "trigger": ("BOOLEAN", {"default": True, "forceInput": True}),
                 "queue_threshold": ("INT", {"default": 199, "min": 1, "max": 1000, "step": 1}),
-                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100, "forceInput": True}),
+                "check_interval_ms": ("INT", {"default": 1000, "min": 100, "max": 60000, "step": 100}),
             }
         }
 

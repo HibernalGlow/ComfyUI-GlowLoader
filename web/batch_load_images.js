@@ -355,7 +355,7 @@ async function queueAllSequential(node) {
     try {
         wMode.value = "single";
         wMode.callback?.(wMode.value);
-        // 顺序入队：禁用 shuffle 和 seed，按 index 顺序
+        // 顺序入队：禁用 shuffle，按 index 顺序
         if (wShuffle) {
             wShuffle.value = false;
             wShuffle.callback?.(false);
@@ -364,11 +364,6 @@ async function queueAllSequential(node) {
             wAllowDup.value = true; // 顺序入队允许重复（循环）
             wAllowDup.callback?.(true);
         }
-        if (wSeed) {
-            wSeed.value = -1;
-            wSeed.callback?.(-1);
-        }
-
         for (let i = 0; i < totalCount; i++) {
             wIndex.value = i;
             wIndex.callback?.(wIndex.value);
@@ -407,6 +402,24 @@ function shuffleArray(array) {
     return arr;
 }
 
+function mulberry32(seed) {
+    return function () {
+        let t = (seed += 0x6d2b79f5);
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+function shuffleArrayWithRng(array, rng) {
+    const arr = array.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
 async function queueAllShuffled(node) {
     const names0 = parseImageList(getImageListWidget(node)?.value);
     if (!names0 || names0.length === 0) return;
@@ -417,20 +430,22 @@ async function queueAllShuffled(node) {
 
     const queueCount = getQueueCountValue(node);
     const allowDuplicate = getAllowDuplicateValue(node);
+    const seed = getSeedValue(node);
+    const rng = seed >= 0 ? mulberry32(seed) : Math.random;
     const totalCount = queueCount > 0 ? queueCount : names.length;
 
     // 生成乱序索引
     let indices;
     if (allowDuplicate) {
         // 允许重复：纯随机选择
-        indices = Array.from({ length: totalCount }, () => Math.floor(Math.random() * names.length));
+        indices = Array.from({ length: totalCount }, () => Math.floor(rng() * names.length));
     } else {
         // 不允许重复：每轮重新打乱，每轮每张图只出现一次
         indices = [];
         let remaining = totalCount;
         while (remaining > 0) {
             const roundSize = Math.min(remaining, names.length);
-            const roundIndices = shuffleArray(Array.from({ length: names.length }, (_, i) => i)).slice(0, roundSize);
+            const roundIndices = shuffleArrayWithRng(Array.from({ length: names.length }, (_, i) => i), rng).slice(0, roundSize);
             indices.push(...roundIndices);
             remaining -= roundSize;
         }
@@ -470,7 +485,7 @@ async function queueAllShuffled(node) {
     try {
         wMode.value = "single";
         wMode.callback?.(wMode.value);
-        // 乱序入队：启用 shuffle，禁用 seed（由前端决定）
+        // 乱序入队：启用 shuffle，seed 由标准控件决定随机序列
         if (wShuffle) {
             wShuffle.value = true;
             wShuffle.callback?.(true);
@@ -479,11 +494,6 @@ async function queueAllShuffled(node) {
             wAllowDup.value = allowDuplicate;
             wAllowDup.callback?.(allowDuplicate);
         }
-        if (wSeed) {
-            wSeed.value = -1;
-            wSeed.callback?.(-1);
-        }
-
         for (let i = 0; i < indices.length; i++) {
             wIndex.value = indices[i];
             wIndex.callback?.(wIndex.value);
@@ -805,64 +815,12 @@ function createBrowserUI(node) {
     btnRow.appendChild(clearBtn);
     btnRow.appendChild(stopBtn);
 
-    // 队列设置行
-    const queueSettingsRow = document.createElement("div");
-    queueSettingsRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center;";
-
     const mkLabel = (text) => {
         const span = document.createElement("span");
         span.textContent = text;
         span.style.cssText = "font-size:11px;opacity:0.8;";
         return span;
     };
-
-    const mkInput = (type, value, onChange) => {
-        const input = document.createElement("input");
-        input.type = type;
-        input.value = value;
-        input.style.cssText = "width:60px;padding:4px;background:var(--comfy-input-bg);color:var(--input-text);border:1px solid var(--border-color);border-radius:4px;font-size:12px;";
-        input.onchange = (e) => onChange?.(e.target.value);
-        return input;
-    };
-
-    queueSettingsRow.appendChild(mkLabel("检查间隔ms:"));
-    const intervalInput = mkInput("number", getCheckIntervalValue(node), (v) => {
-        intervalInput.value = setWidgetValue(node, "check_interval_ms", Math.max(100, Math.min(60000, parseInt(v) || 1000)));
-    });
-    intervalInput.style.width = "60px";
-    queueSettingsRow.appendChild(intervalInput);
-
-    // 入队设置行（queue_count, shuffle, allow_duplicate）
-    const queueControlRow = document.createElement("div");
-    queueControlRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center;";
-
-    queueControlRow.appendChild(mkLabel("入队次数:"));
-    const queueCountInput = mkInput("number", getQueueCountValue(node), (v) => {
-        queueCountInput.value = setWidgetValue(node, "queue_count", Math.max(0, parseInt(v) || 0));
-    });
-    queueCountInput.style.width = "60px";
-    queueCountInput.title = "0=全部入队";
-    queueControlRow.appendChild(queueCountInput);
-
-    queueControlRow.appendChild(mkLabel("乱序:"));
-    const shuffleCheckbox = document.createElement("input");
-    shuffleCheckbox.type = "checkbox";
-    shuffleCheckbox.checked = getShuffleValue(node);
-    shuffleCheckbox.style.cssText = "width:16px;height:16px;cursor:pointer;";
-    shuffleCheckbox.onchange = (e) => {
-        shuffleCheckbox.checked = setWidgetValue(node, "shuffle", e.target.checked);
-    };
-    queueControlRow.appendChild(shuffleCheckbox);
-
-    queueControlRow.appendChild(mkLabel("允许重复:"));
-    const allowDupCheckbox = document.createElement("input");
-    allowDupCheckbox.type = "checkbox";
-    allowDupCheckbox.checked = getAllowDuplicateValue(node);
-    allowDupCheckbox.style.cssText = "width:16px;height:16px;cursor:pointer;";
-    allowDupCheckbox.onchange = (e) => {
-        allowDupCheckbox.checked = setWidgetValue(node, "allow_duplicate", e.target.checked);
-    };
-    queueControlRow.appendChild(allowDupCheckbox);
 
     const info = document.createElement("div");
     info.style.cssText = "font-size:12px;opacity:0.85;margin-bottom:6px;";
@@ -1047,8 +1005,6 @@ function createBrowserUI(node) {
     };
 
     container.appendChild(btnRow);
-    container.appendChild(queueSettingsRow);
-    container.appendChild(queueControlRow);
     container.appendChild(batchInfo);
     container.appendChild(info);
     container.appendChild(grid);
@@ -1085,28 +1041,6 @@ app.registerExtension({
             if (triggerWidget) {
                 triggerWidget.type = "hidden";
                 triggerWidget.computeSize = () => [0, -4];
-            }
-
-            // 队列阈值保留为 ComfyUI 标准控件/输入，避免自绘 UI 另存一份状态。
-            // 其他队列控制 widget 仍通过面板控制，但走标准 widget 序列化保存。
-            const queueWidgets = ["check_interval_ms", "queue_count", "shuffle", "allow_duplicate"];
-            for (const name of queueWidgets) {
-                const w = getWidgetByName(this, name);
-                if (w) {
-                    w.type = "hidden";
-                    w.computeSize = () => [0, -4];
-                    if (name === "queue_count" || name === "check_interval_ms") {
-                        if (w.value === "" || w.value === null || w.value === undefined) {
-                            w.value = name === "check_interval_ms" ? 1000 : 0;
-                        }
-                        const origSerialize = w.serializeValue;
-                        w.serializeValue = async () => {
-                            const v = origSerialize ? await origSerialize() : w.value;
-                            const num = parseInt(v, 10);
-                            return isNaN(num) ? (name === "check_interval_ms" ? 1000 : 0) : num;
-                        };
-                    }
-                }
             }
 
             // Create file-browser like UI
