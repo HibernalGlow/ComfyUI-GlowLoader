@@ -118,7 +118,36 @@ async function waitForQueueSpace(node, targetSpace = 1) {
 
 function setBatchStatus(node, status) {
     node._glowloaderBatchStatus = status;
+    node.properties = node.properties || {};
+    node.properties.glowloader_last_batch = status || null;
+    if (status?.batch_id) {
+        node.properties.glowloader_last_batch_id = status.batch_id;
+    }
     node._batchLoadTextsUI?.updateBatchStatus?.(status);
+    app.graph.setDirtyCanvas(true, true);
+}
+
+async function restoreBatchStatus(node) {
+    const saved = node?.properties?.glowloader_last_batch || null;
+    if (saved) {
+        node._glowloaderBatchStatus = saved;
+        node._batchLoadTextsUI?.updateBatchStatus?.(saved);
+    }
+
+    const batchId = node?.properties?.glowloader_last_batch_id || saved?.batch_id;
+    if (!batchId) return;
+
+    try {
+        const status = await QueueManager.getBatchStatus(batchId);
+        if (status) {
+            setBatchStatus(node, status);
+            if (!["completed", "cancelled", "error"].includes(status.status)) {
+                QueueManager.watchBatch(status.batch_id, (next) => setBatchStatus(node, next));
+            }
+        }
+    } catch (e) {
+        console.warn("[BatchLoadTexts] 恢复批次状态失败:", e);
+    }
 }
 
 async function submitPromptBatch(node, label, prompts) {
@@ -1205,7 +1234,7 @@ function createTextListUI(node) {
     container.appendChild(batchInfo);
     container.appendChild(info);
     container.appendChild(listContainer);
-    updateBatchStatus(node._glowloaderBatchStatus);
+    updateBatchStatus(node._glowloaderBatchStatus || node?.properties?.glowloader_last_batch);
 
     // 初始化 UI 状态
     updateUIForSourceMode();
@@ -1289,6 +1318,7 @@ app.registerExtension({
             }
 
             ui.asyncRedraw();
+            restoreBatchStatus(this);
 
             return r;
         };
@@ -1297,6 +1327,7 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function () {
             const r = origOnConfigure?.apply(this, arguments);
             this._batchLoadTextsUI?.asyncRedraw?.();
+            restoreBatchStatus(this);
             return r;
         };
 
