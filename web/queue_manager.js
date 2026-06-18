@@ -105,11 +105,41 @@ const QueueManager = {
         await api.queuePrompt(0, prompt);
     },
 
+    getWorkflowInfo() {
+        const candidates = [
+            app.workflowManager?.activeWorkflow,
+            app.workflowManager?.workflow,
+            app.extensionManager?.workflow?.activeWorkflow,
+            app.extensionManager?.workflow,
+            app.graph?._workflow,
+            app.graph?.workflow,
+            app.graph,
+        ];
+        const keys = ["name", "title", "filename", "fileName", "path", "fullPath", "basename"];
+        for (const source of candidates) {
+            if (!source || typeof source !== "object") continue;
+            for (const key of keys) {
+                const value = source[key];
+                if (typeof value === "string" && value.trim()) {
+                    const label = value.split(/[\\/]/).pop() || value;
+                    return { id: value, label };
+                }
+            }
+        }
+        const title = document?.title?.replace(/\s*-\s*ComfyUI\s*$/i, "").trim();
+        if (title && title !== "ComfyUI") return { id: title, label: title };
+        return { id: "current", label: "当前工作流" };
+    },
+
     async submitBatch({ node, label, prompts, threshold, checkInterval }) {
         if (!prompts || prompts.length === 0) return null;
+        const workflow = this.getWorkflowInfo();
         const body = {
             node_id: String(node?.id ?? ""),
             label: label || node?.title || node?.type || "GlowLoader Batch",
+            workflow_id: workflow.id,
+            workflow_label: workflow.label,
+            node_title: node?.title || node?.type || "",
             threshold,
             check_interval_ms: checkInterval,
             client_id: api.clientId,

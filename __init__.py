@@ -51,6 +51,9 @@ class GlowBatchCoordinator:
         return {
             "batch_id": batch["batch_id"],
             "node_id": batch.get("node_id"),
+            "node_title": batch.get("node_title", ""),
+            "workflow_id": batch.get("workflow_id", ""),
+            "workflow_label": batch.get("workflow_label", ""),
             "label": batch.get("label", ""),
             "status": batch["status"],
             "threshold": batch["threshold"],
@@ -60,6 +63,9 @@ class GlowBatchCoordinator:
             "queue": dict(batch.get("queue_counts") or {"pending": 0, "running": 0, "total": 0}),
             "prompt_ids": list(batch["prompt_ids"]),
             "error": batch.get("error", ""),
+            "created_at": batch.get("created_at"),
+            "started_at": batch.get("started_at"),
+            "completed_at": batch.get("completed_at"),
         }
 
     async def submit(self, request, data):
@@ -79,6 +85,9 @@ class GlowBatchCoordinator:
         batch = {
             "batch_id": batch_id,
             "node_id": str(data.get("node_id", "")),
+            "node_title": str(data.get("node_title", "")),
+            "workflow_id": str(data.get("workflow_id", "")),
+            "workflow_label": str(data.get("workflow_label", "")),
             "label": str(data.get("label", "")),
             "base_url": f"{request.scheme}://{request.host}",
             "client_id": data.get("client_id"),

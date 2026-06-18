@@ -275,8 +275,13 @@ function setWidgetPreviewValue(widget, value) {
 }
 
 async function updatePrepareStatus(node, label, completed, total, currentIndex = null) {
+    const workflow = QueueManager.getWorkflowInfo?.() || {};
     setBatchStatus(node, {
         batch_id: null,
+        node_id: String(node?.id ?? ""),
+        node_title: node?.title || node?.type || "",
+        workflow_id: workflow.id || "current",
+        workflow_label: workflow.label || "当前工作流",
         label,
         status: "准备中",
         threshold: getQueueThresholdValue(node),
