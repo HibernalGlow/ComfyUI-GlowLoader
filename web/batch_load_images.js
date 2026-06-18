@@ -263,6 +263,26 @@ async function waitForQueueSpace(node, targetSpace = 1) {
     return QueueManager.waitForSpace(threshold, checkInterval, targetSpace);
 }
 
+function setBatchStatus(node, status) {
+    node._glowloaderBatchStatus = status;
+    node._batchLoadImagesUI?.updateBatchStatus?.(status);
+}
+
+async function submitPromptBatch(node, label, prompts) {
+    const batch = await QueueManager.submitBatch({
+        node,
+        label,
+        prompts,
+        threshold: getQueueThresholdValue(node),
+        checkInterval: getCheckIntervalValue(node),
+    });
+    if (batch) {
+        setBatchStatus(node, batch);
+        QueueManager.watchBatch(batch.batch_id, (status) => setBatchStatus(node, status));
+    }
+    return batch;
+}
+
 async function queueAllSequential(node) {
     const names0 = parseImageList(getImageListWidget(node)?.value);
     if (!names0 || names0.length === 0) return;
@@ -274,95 +294,78 @@ async function queueAllSequential(node) {
     const queueCount = getQueueCountValue(node);
     const totalCount = queueCount > 0 ? queueCount : names.length;
 
-    return QueueManager.runExclusive(async () => {
-        const wMode = getWidgetByName(node, "mode");
-        const wIndex = getWidgetByName(node, "index");
-        const wShuffle = getWidgetByName(node, "shuffle");
-        const wAllowDup = getWidgetByName(node, "allow_duplicate");
-        const wSeed = getWidgetByName(node, "seed");
+    const prompts = [];
+    const wMode = getWidgetByName(node, "mode");
+    const wIndex = getWidgetByName(node, "index");
+    const wShuffle = getWidgetByName(node, "shuffle");
+    const wAllowDup = getWidgetByName(node, "allow_duplicate");
+    const wSeed = getWidgetByName(node, "seed");
 
-        if (!wMode || !wIndex) {
-            const basePrompt = await QueueManager.getPrompt();
-            const nodeId = String(node.id);
-            const initialQueueSize = QueueManager.getQueueSize();
-            const threshold = getQueueThresholdValue(node);
-            const firstBatch = Math.max(0, threshold - initialQueueSize);
-            for (let i = 0; i < totalCount; i++) {
-                if (QueueManager.aborted) { console.log("[BatchLoadImages] 已停止入队"); break; }
-                if (i >= firstBatch) {
-                    const ok = await waitForQueueSpace(node, 1);
-                    if (!ok) break;
-                }
-                const prompt = deepClone(basePrompt);
-                const apiNode = prompt.output?.[nodeId];
-                if (!apiNode) continue;
-                apiNode.inputs = apiNode.inputs || {};
-                apiNode.inputs.mode = "single";
-                apiNode.inputs.index = i;
-                apiNode.inputs.allow_duplicate = true;
-                await QueueManager.enqueuePrompt(prompt);
-            }
-            return;
+    if (!wMode || !wIndex) {
+        const basePrompt = await QueueManager.getPrompt();
+        const nodeId = String(node.id);
+        for (let i = 0; i < totalCount; i++) {
+            const prompt = deepClone(basePrompt);
+            const apiNode = prompt.output?.[nodeId];
+            if (!apiNode) continue;
+            apiNode.inputs = apiNode.inputs || {};
+            apiNode.inputs.mode = "single";
+            apiNode.inputs.index = i;
+            apiNode.inputs.allow_duplicate = true;
+            prompts.push(prompt);
+        }
+        return submitPromptBatch(node, "逐张入队", prompts);
+    }
+
+    const prevMode = wMode.value;
+    const prevIndex = wIndex.value;
+    const prevShuffle = wShuffle?.value;
+    const prevAllowDup = wAllowDup?.value;
+    const prevSeed = wSeed?.value;
+
+    try {
+        wMode.value = "single";
+        wMode.callback?.(wMode.value);
+        // 顺序入队：禁用 shuffle 和 seed，按 index 顺序
+        if (wShuffle) {
+            wShuffle.value = false;
+            wShuffle.callback?.(false);
+        }
+        if (wAllowDup) {
+            wAllowDup.value = true; // 顺序入队允许重复（循环）
+            wAllowDup.callback?.(true);
+        }
+        if (wSeed) {
+            wSeed.value = -1;
+            wSeed.callback?.(-1);
         }
 
-        const prevMode = wMode.value;
-        const prevIndex = wIndex.value;
-        const prevShuffle = wShuffle?.value;
-        const prevAllowDup = wAllowDup?.value;
-        const prevSeed = wSeed?.value;
-
-        try {
-            wMode.value = "single";
-            wMode.callback?.(wMode.value);
-            // 顺序入队：禁用 shuffle 和 seed，按 index 顺序
-            if (wShuffle) {
-                wShuffle.value = false;
-                wShuffle.callback?.(false);
-            }
-            if (wAllowDup) {
-                wAllowDup.value = true; // 顺序入队允许重复（循环）
-                wAllowDup.callback?.(true);
-            }
-            if (wSeed) {
-                wSeed.value = -1;
-                wSeed.callback?.(-1);
-            }
-
-            const initialQueueSize = QueueManager.getQueueSize();
-            const threshold = getQueueThresholdValue(node);
-            const firstBatch = Math.max(0, threshold - initialQueueSize);
-            console.log(`[BatchLoadImages] 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, totalCount)}`);
-
-            for (let i = 0; i < totalCount; i++) {
-                if (QueueManager.aborted) { console.log("[BatchLoadImages] 已停止入队"); break; }
-                if (i >= firstBatch) {
-                    const ok = await waitForQueueSpace(node, 1);
-                    if (!ok) break;
-                }
-                wIndex.value = i;
-                wIndex.callback?.(wIndex.value);
-                QueueManager.invalidatePromptCache();
-                await queueCurrent(node);
-            }
-        } finally {
-            wMode.value = prevMode;
-            wMode.callback?.(wMode.value);
-            wIndex.value = prevIndex;
+        for (let i = 0; i < totalCount; i++) {
+            wIndex.value = i;
             wIndex.callback?.(wIndex.value);
-            if (wShuffle) {
-                wShuffle.value = prevShuffle;
-                wShuffle.callback?.(prevShuffle);
-            }
-            if (wAllowDup) {
-                wAllowDup.value = prevAllowDup;
-                wAllowDup.callback?.(prevAllowDup);
-            }
-            if (wSeed) {
-                wSeed.value = prevSeed;
-                wSeed.callback?.(prevSeed);
-            }
+            QueueManager.invalidatePromptCache();
+            prompts.push(deepClone(await QueueManager.getPrompt()));
         }
-    });
+    } finally {
+        wMode.value = prevMode;
+        wMode.callback?.(wMode.value);
+        wIndex.value = prevIndex;
+        wIndex.callback?.(wIndex.value);
+        if (wShuffle) {
+            wShuffle.value = prevShuffle;
+            wShuffle.callback?.(prevShuffle);
+        }
+        if (wAllowDup) {
+            wAllowDup.value = prevAllowDup;
+            wAllowDup.callback?.(prevAllowDup);
+        }
+        if (wSeed) {
+            wSeed.value = prevSeed;
+            wSeed.callback?.(prevSeed);
+        }
+    }
+
+    return submitPromptBatch(node, "逐张入队", prompts);
 }
 
 // Fisher-Yates 洗牌算法
@@ -404,97 +407,80 @@ async function queueAllShuffled(node) {
         }
     }
 
-    return QueueManager.runExclusive(async () => {
-        const wMode = getWidgetByName(node, "mode");
-        const wIndex = getWidgetByName(node, "index");
-        const wShuffle = getWidgetByName(node, "shuffle");
-        const wAllowDup = getWidgetByName(node, "allow_duplicate");
-        const wSeed = getWidgetByName(node, "seed");
+    const prompts = [];
+    const wMode = getWidgetByName(node, "mode");
+    const wIndex = getWidgetByName(node, "index");
+    const wShuffle = getWidgetByName(node, "shuffle");
+    const wAllowDup = getWidgetByName(node, "allow_duplicate");
+    const wSeed = getWidgetByName(node, "seed");
 
-        if (!wMode || !wIndex) {
-            const basePrompt = await QueueManager.getPrompt();
-            const nodeId = String(node.id);
-            const initialQueueSize = QueueManager.getQueueSize();
-            const threshold = getQueueThresholdValue(node);
-            const firstBatch = Math.max(0, threshold - initialQueueSize);
-            for (let i = 0; i < indices.length; i++) {
-                if (QueueManager.aborted) { console.log("[BatchLoadImages] 已停止入队"); break; }
-                if (i >= firstBatch) {
-                    const ok = await waitForQueueSpace(node, 1);
-                    if (!ok) break;
-                }
-                const idx = indices[i];
-                const prompt = deepClone(basePrompt);
-                const apiNode = prompt.output?.[nodeId];
-                if (!apiNode) continue;
-                apiNode.inputs = apiNode.inputs || {};
-                apiNode.inputs.mode = "single";
-                apiNode.inputs.index = idx;
-                apiNode.inputs.shuffle = true;
-                apiNode.inputs.allow_duplicate = allowDuplicate;
-                await QueueManager.enqueuePrompt(prompt);
-            }
-            return;
+    if (!wMode || !wIndex) {
+        const basePrompt = await QueueManager.getPrompt();
+        const nodeId = String(node.id);
+        for (let i = 0; i < indices.length; i++) {
+            const idx = indices[i];
+            const prompt = deepClone(basePrompt);
+            const apiNode = prompt.output?.[nodeId];
+            if (!apiNode) continue;
+            apiNode.inputs = apiNode.inputs || {};
+            apiNode.inputs.mode = "single";
+            apiNode.inputs.index = idx;
+            apiNode.inputs.shuffle = true;
+            apiNode.inputs.allow_duplicate = allowDuplicate;
+            prompts.push(prompt);
+        }
+        return submitPromptBatch(node, "乱序入队", prompts);
+    }
+
+    const prevMode = wMode.value;
+    const prevIndex = wIndex.value;
+    const prevShuffle = wShuffle?.value;
+    const prevAllowDup = wAllowDup?.value;
+    const prevSeed = wSeed?.value;
+
+    try {
+        wMode.value = "single";
+        wMode.callback?.(wMode.value);
+        // 乱序入队：启用 shuffle，禁用 seed（由前端决定）
+        if (wShuffle) {
+            wShuffle.value = true;
+            wShuffle.callback?.(true);
+        }
+        if (wAllowDup) {
+            wAllowDup.value = allowDuplicate;
+            wAllowDup.callback?.(allowDuplicate);
+        }
+        if (wSeed) {
+            wSeed.value = -1;
+            wSeed.callback?.(-1);
         }
 
-        const prevMode = wMode.value;
-        const prevIndex = wIndex.value;
-        const prevShuffle = wShuffle?.value;
-        const prevAllowDup = wAllowDup?.value;
-        const prevSeed = wSeed?.value;
-
-        try {
-            wMode.value = "single";
-            wMode.callback?.(wMode.value);
-            // 乱序入队：启用 shuffle，禁用 seed（由前端决定）
-            if (wShuffle) {
-                wShuffle.value = true;
-                wShuffle.callback?.(true);
-            }
-            if (wAllowDup) {
-                wAllowDup.value = allowDuplicate;
-                wAllowDup.callback?.(allowDuplicate);
-            }
-            if (wSeed) {
-                wSeed.value = -1;
-                wSeed.callback?.(-1);
-            }
-
-            const initialQueueSize = QueueManager.getQueueSize();
-            const threshold = getQueueThresholdValue(node);
-            const firstBatch = Math.max(0, threshold - initialQueueSize);
-            console.log(`[BatchLoadImages] 乱序入队 - 初始队列: ${initialQueueSize}, 阈值: ${threshold}, 首批入队: ${Math.min(firstBatch, indices.length)}`);
-
-            for (let i = 0; i < indices.length; i++) {
-                if (QueueManager.aborted) { console.log("[BatchLoadImages] 已停止入队"); break; }
-                if (i >= firstBatch) {
-                    const ok = await waitForQueueSpace(node, 1);
-                    if (!ok) break;
-                }
-                wIndex.value = indices[i];
-                wIndex.callback?.(wIndex.value);
-                QueueManager.invalidatePromptCache();
-                await queueCurrent(node);
-            }
-        } finally {
-            wMode.value = prevMode;
-            wMode.callback?.(wMode.value);
-            wIndex.value = prevIndex;
+        for (let i = 0; i < indices.length; i++) {
+            wIndex.value = indices[i];
             wIndex.callback?.(wIndex.value);
-            if (wShuffle) {
-                wShuffle.value = prevShuffle;
-                wShuffle.callback?.(prevShuffle);
-            }
-            if (wAllowDup) {
-                wAllowDup.value = prevAllowDup;
-                wAllowDup.callback?.(prevAllowDup);
-            }
-            if (wSeed) {
-                wSeed.value = prevSeed;
-                wSeed.callback?.(prevSeed);
-            }
+            QueueManager.invalidatePromptCache();
+            prompts.push(deepClone(await QueueManager.getPrompt()));
         }
-    });
+    } finally {
+        wMode.value = prevMode;
+        wMode.callback?.(wMode.value);
+        wIndex.value = prevIndex;
+        wIndex.callback?.(wIndex.value);
+        if (wShuffle) {
+            wShuffle.value = prevShuffle;
+            wShuffle.callback?.(prevShuffle);
+        }
+        if (wAllowDup) {
+            wAllowDup.value = prevAllowDup;
+            wAllowDup.callback?.(prevAllowDup);
+        }
+        if (wSeed) {
+            wSeed.value = prevSeed;
+            wSeed.callback?.(prevSeed);
+        }
+    }
+
+    return submitPromptBatch(node, "乱序入队", prompts);
 }
 
 function getViewUrl(filename) {
@@ -852,6 +838,18 @@ function createBrowserUI(node) {
     const info = document.createElement("div");
     info.style.cssText = "font-size:12px;opacity:0.85;margin-bottom:6px;";
 
+    const batchInfo = document.createElement("div");
+    batchInfo.style.cssText = "font-size:12px;opacity:0.85;margin-bottom:6px;";
+
+    const updateBatchStatus = (status) => {
+        if (!status) {
+            batchInfo.textContent = "";
+            return;
+        }
+        const id = status.batch_id ? status.batch_id.slice(0, 8) : "-";
+        batchInfo.textContent = `批次 ${id} ${status.status} ${status.completed || 0}/${status.total || 0}（已提交 ${status.submitted || 0}）`;
+    };
+
     const grid = document.createElement("div");
     grid.style.cssText =
         "display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px;max-height:260px;overflow-y:auto;background:var(--comfy-input-bg);padding:6px;border-radius:4px;";
@@ -1022,13 +1020,16 @@ function createBrowserUI(node) {
     container.appendChild(btnRow);
     container.appendChild(queueSettingsRow);
     container.appendChild(queueControlRow);
+    container.appendChild(batchInfo);
     container.appendChild(info);
     container.appendChild(grid);
+    updateBatchStatus(node._glowloaderBatchStatus);
 
     return {
         container,
         redraw,
         setDragging,
+        updateBatchStatus,
     };
 }
 

@@ -11,9 +11,6 @@ const QueueManager = {
     /** 当前是否正在入队 */
     _queuing: false,
 
-    /** FIFO 入队锁：保证 A 的补队循环结束后，B/C 才开始 */
-    _queueTail: Promise.resolve(),
-
     get aborted() {
         return this._aborted;
     },
@@ -22,34 +19,15 @@ const QueueManager = {
         return this._queuing;
     },
 
-    async runExclusive(task) {
-        let release;
-        const gate = new Promise((resolve) => {
-            release = resolve;
-        });
-        const previous = this._queueTail.catch(() => {});
-        this._queueTail = previous.then(() => gate);
-
-        await previous;
-        this.startQueuing();
-        try {
-            return await task();
-        } finally {
-            try {
-                if (!this._aborted) {
-                    await this.waitUntilIdle();
-                }
-            } finally {
-                this.endQueuing();
-                release();
-            }
-        }
-    },
-
     /** 请求中止当前入队操作 */
     stop() {
         this._aborted = true;
         console.log("[QueueManager] 收到停止请求");
+        api.fetchApi("/glowloader/batch/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        }).catch((e) => console.warn("[QueueManager] 后端批次取消失败:", e));
     },
 
     /** 重置中止标志（新一轮入队开始时调用） */
@@ -125,6 +103,57 @@ const QueueManager = {
 
     async enqueuePrompt(prompt) {
         await api.queuePrompt(0, prompt);
+    },
+
+    async submitBatch({ node, label, prompts, threshold, checkInterval }) {
+        if (!prompts || prompts.length === 0) return null;
+        const body = {
+            node_id: String(node?.id ?? ""),
+            label: label || node?.title || node?.type || "GlowLoader Batch",
+            threshold,
+            check_interval_ms: checkInterval,
+            client_id: api.clientId,
+            prompts,
+        };
+        const resp = await api.fetchApi("/glowloader/batch/submit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) {
+            throw new Error(await resp.text());
+        }
+        return await resp.json();
+    },
+
+    async getBatchStatus(batchId) {
+        const resp = await api.fetchApi(`/glowloader/batch/status?batch_id=${encodeURIComponent(batchId)}`);
+        if (!resp.ok) {
+            throw new Error(await resp.text());
+        }
+        const json = await resp.json();
+        return json?.batches?.[0] || null;
+    },
+
+    watchBatch(batchId, onUpdate) {
+        let stopped = false;
+        const tick = async () => {
+            if (stopped) return;
+            try {
+                const status = await this.getBatchStatus(batchId);
+                if (status) {
+                    onUpdate?.(status);
+                    if (["completed", "cancelled", "error"].includes(status.status)) return;
+                }
+            } catch (e) {
+                console.warn("[QueueManager] 批次状态查询失败:", e);
+            }
+            setTimeout(tick, 1000);
+        };
+        tick();
+        return () => {
+            stopped = true;
+        };
     },
 
     deepClone(obj) {
