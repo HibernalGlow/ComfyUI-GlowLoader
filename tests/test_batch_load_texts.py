@@ -79,6 +79,30 @@ class TestBatchLoadTexts:
         assert result[0] == "line2"
         assert result[2] == 1
 
+    def test_direct_execution_ignores_shuffle_for_index(self):
+        node = BatchLoadTexts()
+        text_list = "line0\nline1\nline2\nline3"
+
+        result = node.load_texts(
+            "direct", text_list, "one_per_file", 0, "single", 2,
+            shuffle=True, allow_duplicate=True, seed=123
+        )
+
+        assert result[0] == "line2"
+        assert result[2] == 2
+
+    def test_direct_execution_wraps_index_with_duplicate_even_if_shuffle_enabled(self):
+        node = BatchLoadTexts()
+        text_list = "line0\nline1\nline2"
+
+        result = node.load_texts(
+            "direct", text_list, "one_per_file", 0, "single", 4,
+            shuffle=True, allow_duplicate=True, seed=123
+        )
+
+        assert result[0] == "line1"
+        assert result[2] == 1
+
 
 class TestGenerateQueueSequence:
     """测试 generate_queue_sequence 方法"""

@@ -190,6 +190,8 @@ function setWidgetValue(node, name, value) {
 
 async function queueCurrent(node) {
     const prompt = await QueueManager.getPrompt();
+    const index = readIntWidget(node, "index", 0, 0, 100000);
+    patchTextPrompt(prompt, node, index, { shuffle: false });
     await QueueManager.enqueuePrompt(prompt);
 }
 

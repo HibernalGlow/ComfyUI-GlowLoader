@@ -162,7 +162,7 @@ class BatchLoadTexts:
 
         # 普通 ComfyUI 执行也必须按 index 指向当前文本；mode 只保留为兼容字段。
         effective_index = self._resolve_index(
-            total, index, shuffle, allow_duplicate, effective_seed
+            total, index, False, allow_duplicate, effective_seed
         )
         # 计算循环索引：当 allow_duplicate=True 时，index 可以超过 total
         # loop_index 表示当前是第几轮循环（从0开始）
