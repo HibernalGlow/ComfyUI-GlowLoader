@@ -136,4 +136,6 @@ class GlowDynamicTypedOutputs:
 
         selected_index = _clamp_count(index)
         selected = outputs[selected_index - 1] if selected_index <= count else None
+        if count < MAX_DYNAMIC_OUTPUTS:
+            outputs[count] = selected
         return tuple(outputs + [selected])

@@ -55,7 +55,7 @@ def test_inactive_outputs_return_none_even_when_defaults_exist():
     )
 
     assert outputs[0] == "active"
-    assert outputs[1] is None
+    assert outputs[1] == "active"
     assert outputs[MAX_DYNAMIC_OUTPUTS - 1] is None
     assert outputs[-1] == "active"
 
@@ -87,6 +87,7 @@ def test_by_index_output_uses_one_based_index():
     )
 
     assert outputs[-1] == "second"
+    assert outputs[3] == "second"
 
 
 def test_by_index_output_returns_none_when_index_is_inactive():
@@ -102,6 +103,7 @@ def test_by_index_output_returns_none_when_index_is_inactive():
     )
 
     assert outputs[-1] is None
+    assert outputs[1] is None
 
 
 def test_new_nodes_default_to_float_outputs_not_any_choice():

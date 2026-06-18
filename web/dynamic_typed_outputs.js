@@ -6,6 +6,7 @@ const HIDDEN_WIDGET_HEIGHT = -4;
 const MIN_NODE_WIDTH = 360;
 const DEFAULTABLE_TYPES = new Set(["STRING", "INT", "FLOAT", "BOOLEAN", "COMBO"]);
 const RESIZE_GUARD_INTERVAL_MS = 150;
+const INDEX_OUTPUT_LABEL = "index 输出";
 
 function getWidget(node, name) {
     return node?.widgets?.find((widget) => widget.name === name);
@@ -56,8 +57,8 @@ function selectedTypeRaw(node, index) {
     return String(getWidget(node, `type_${index}`)?.value || "FLOAT").trim().toUpperCase();
 }
 
-function selectedIndex(node) {
-    const value = getWidget(node, "index")?.value ?? 1;
+function selectedIndex(node, overrideValue = undefined) {
+    const value = overrideValue ?? getWidget(node, "index")?.value ?? node.properties?.index ?? 1;
     return clampCount(value);
 }
 
@@ -147,6 +148,7 @@ function installSizing(node) {
     const originalOnDrawForeground = node.onDrawForeground;
     node.onDrawForeground = function () {
         const result = originalOnDrawForeground?.apply(this, arguments);
+        refreshIndexOutput(this);
         scheduleSizeGuard(this);
         return result;
     };
@@ -315,18 +317,61 @@ function syncSlotTypes(node, count) {
     syncIndexOutput(node, count);
 }
 
-function syncIndexOutput(node, count = selectedCount(node)) {
-    const index = selectedIndex(node);
+function syncIndexOutput(node, count = selectedCount(node), overrideIndex = undefined) {
+    const index = selectedIndex(node, overrideIndex);
     const selectedOutput = node.outputs?.[count];
+    let changed = false;
     if (selectedOutput) {
-        const type = selectedType(node, index);
-        const label = `index ${index} ${displayType(type)}`;
-        selectedOutput.name = label;
-        selectedOutput.type = type;
-        selectedOutput.label = label;
+        const type = "*";
+        const label = INDEX_OUTPUT_LABEL;
+        if (selectedOutput.name !== label) {
+            selectedOutput.name = label;
+            changed = true;
+        }
+        if (selectedOutput.type !== type) {
+            selectedOutput.type = type;
+            changed = true;
+        }
+        if (selectedOutput.label !== label) {
+            selectedOutput.label = label;
+            changed = true;
+        }
     }
     node.properties = node.properties || {};
-    node.properties.index = index;
+    if (node.properties.index !== index) {
+        node.properties.index = index;
+        changed = true;
+    }
+    node._glowDynamicLastIndex = index;
+    return changed;
+}
+
+function setIndexWidgetValue(widget, value) {
+    if (!widget || widget.value === value) return;
+    widget._glowDynamicIndexSetting = true;
+    try {
+        widget.value = value;
+    } finally {
+        widget._glowDynamicIndexSetting = false;
+    }
+}
+
+function refreshIndexOutput(node, rawValue = undefined) {
+    const widget = getWidget(node, "index");
+    const index = selectedIndex(node, rawValue);
+    setIndexWidgetValue(widget, index);
+    if (!syncIndexOutput(node, selectedCount(node), index)) return;
+    notifyVue(node);
+    node.setDirtyCanvas?.(true, true);
+    app.graph?.setDirtyCanvas(true, true);
+}
+
+function scheduleIndexOutputSync(node, rawValue = undefined) {
+    refreshIndexOutput(node, rawValue);
+    if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => refreshIndexOutput(node));
+    }
+    setTimeout(() => refreshIndexOutput(node), 0);
 }
 
 function localizeWidgets(node) {
@@ -406,19 +451,39 @@ function wrapWidgetCallback(node, widget) {
 
 function wrapIndexCallback(node) {
     const widget = getWidget(node, "index");
-    if (!widget || widget._glowDynamicCallbackInstalled) return;
-    widget._glowDynamicCallbackInstalled = true;
+    if (!widget) return;
+    installIndexValueWatcher(node, widget);
+    if (widget._glowDynamicIndexCallbackInstalled) return;
+    widget._glowDynamicIndexCallbackInstalled = true;
     const originalCallback = widget.callback;
-    widget.callback = function () {
+    widget.callback = function (value) {
+        if (value !== undefined) setIndexWidgetValue(widget, value);
         const result = originalCallback?.apply(this, arguments);
-        const index = selectedIndex(node);
-        if (widget.value !== index) widget.value = index;
-        syncIndexOutput(node);
-        notifyVue(node);
-        node.setDirtyCanvas?.(true, true);
-        app.graph?.setDirtyCanvas(true, true);
+        scheduleIndexOutputSync(node, value);
         return result;
     };
+}
+
+function installIndexValueWatcher(node, widget) {
+    if (!widget || widget._glowDynamicIndexValueWatcherInstalled) return;
+    const descriptor = Object.getOwnPropertyDescriptor(widget, "value");
+    if (descriptor && descriptor.configurable === false) return;
+
+    widget._glowDynamicIndexValueWatcherInstalled = true;
+    let currentValue = widget.value;
+    Object.defineProperty(widget, "value", {
+        configurable: true,
+        enumerable: true,
+        get() {
+            return currentValue;
+        },
+        set(value) {
+            currentValue = value;
+            if (!widget._glowDynamicIndexSetting) {
+                scheduleIndexOutputSync(node, value);
+            }
+        },
+    });
 }
 
 function installCallbacks(node) {
