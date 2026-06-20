@@ -216,6 +216,20 @@ function removeInput(node, name) {
     if (index >= 0) node.removeInput(index);
 }
 
+function getOutputIndex(node, name) {
+    return (node.outputs || []).findIndex((output) => output.name === name);
+}
+
+function ensureOutput(node, name, type) {
+    if (getOutputIndex(node, name) >= 0) return;
+    node.addOutput(name, type);
+}
+
+function ensureTriggerOutputs(node) {
+    ensureOutput(node, "active_trigger_words", "STRING");
+    ensureOutput(node, "all_trigger_words", "STRING");
+}
+
 function localizeWidgets(node) {
     const labels = {
         lora_count: "LoRA数量",
@@ -476,6 +490,7 @@ function syncVisibleLoraTriggers(node) {
 
 function updateVisibleGroups(node) {
     sanitizeWeightWidgets(node);
+    ensureTriggerOutputs(node);
     installCompactSizing(node);
     compactInputTextWidget(node);
     compactLoraTriggerWidgets(node);

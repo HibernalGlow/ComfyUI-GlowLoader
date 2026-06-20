@@ -143,6 +143,28 @@ def test_same_name_trigger_file_outputs_lora_own_trigger(tmp_path, monkeypatch):
     assert all_triggers == "cat ears, whiskers"
 
 
+def test_empty_lora_trigger_widget_falls_back_to_trigger_file(tmp_path, monkeypatch):
+    lora_dir = tmp_path / "loras"
+    lora_dir.mkdir()
+    (lora_dir / "cat_ears.trigger.txt").write_text("cat ears", encoding="utf-8")
+    monkeypatch.setattr(trigger_lora_stack.folder_paths, "get_folder_paths", lambda name: [str(lora_dir)], raising=False)
+
+    node = GlowTriggerLoRAStack()
+    _, _, _, active_triggers, all_triggers = node.build_lora_stack(
+        lora_count=1,
+        input_text="cat",
+        enable_1=True,
+        lora_name_1="cat_ears.safetensors",
+        model_weight_1=1.0,
+        clip_weight_1=1.0,
+        trigger_1="cat",
+        lora_trigger_1="",
+    )
+
+    assert active_triggers == "cat ears"
+    assert all_triggers == "cat ears"
+
+
 def test_trigger_file_skips_comment_lines(tmp_path, monkeypatch):
     lora_dir = tmp_path / "loras"
     lora_dir.mkdir()

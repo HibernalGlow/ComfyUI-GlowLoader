@@ -239,9 +239,8 @@ class GlowTriggerLoRAStack:
             if not lora_name or lora_name == "None":
                 continue
 
-            if f"lora_trigger_{index}" in kwargs:
-                own_trigger = _clean_lora_trigger_text(kwargs.get(f"lora_trigger_{index}") or "")
-            else:
+            own_trigger = _clean_lora_trigger_text(kwargs.get(f"lora_trigger_{index}") or "")
+            if not own_trigger:
                 own_trigger = read_lora_trigger_file(lora_name)
             own_trigger_line = _collapse_trigger_line(own_trigger)
             if own_trigger_line:
