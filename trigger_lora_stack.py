@@ -42,6 +42,16 @@ def _collapse_trigger_line(trigger):
     return ", ".join(part.strip() for part in str(trigger or "").splitlines() if part.strip())
 
 
+def _clean_lora_trigger_text(trigger):
+    lines = []
+    for raw_line in str(trigger or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _safe_lora_relative_path(lora_name):
     if not lora_name or lora_name == "None":
         return None
@@ -127,14 +137,14 @@ def read_lora_trigger_file(lora_name):
         for encoding in ("utf-8-sig", "utf-8"):
             try:
                 with open(path, "r", encoding=encoding) as f:
-                    return f.read().strip()
+                    return _clean_lora_trigger_text(f.read())
             except UnicodeDecodeError:
                 continue
             except OSError:
                 break
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
-                return f.read().strip()
+                return _clean_lora_trigger_text(f.read())
         except OSError:
             continue
     return ""
@@ -221,7 +231,7 @@ class GlowTriggerLoRAStack:
                 continue
 
             if f"lora_trigger_{index}" in kwargs:
-                own_trigger = str(kwargs.get(f"lora_trigger_{index}") or "").strip()
+                own_trigger = _clean_lora_trigger_text(kwargs.get(f"lora_trigger_{index}") or "")
             else:
                 own_trigger = read_lora_trigger_file(lora_name)
             own_trigger_line = _collapse_trigger_line(own_trigger)

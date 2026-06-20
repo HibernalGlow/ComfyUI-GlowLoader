@@ -82,6 +82,35 @@ def test_same_name_trigger_file_outputs_lora_own_trigger(tmp_path, monkeypatch):
     assert all_triggers == "cat ears, whiskers"
 
 
+def test_trigger_file_skips_comment_lines(tmp_path, monkeypatch):
+    lora_dir = tmp_path / "loras"
+    lora_dir.mkdir()
+    (lora_dir / "arcana.trigger.txt").write_text(
+        "# LoRA: anima_cure_arcana_shadow_v1.4\n"
+        "# Character trigger: cure arcana shadow\n"
+        "#\n"
+        "# Prompt (trigger + appearance tags):\n"
+        "cure arcana shadow, purple eyes\n"
+        "black dress\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(trigger_lora_stack.folder_paths, "get_folder_paths", lambda name: [str(lora_dir)], raising=False)
+
+    node = GlowTriggerLoRAStack()
+    _, _, _, active_triggers, all_triggers = node.build_lora_stack(
+        lora_count=1,
+        input_text="arcana",
+        enable_1=True,
+        lora_name_1="arcana.safetensors",
+        model_weight_1=1.0,
+        clip_weight_1=1.0,
+        trigger_1="arcana",
+    )
+
+    assert active_triggers == "cure arcana shadow, purple eyes, black dress"
+    assert all_triggers == "cure arcana shadow, purple eyes, black dress"
+
+
 def test_lora_own_trigger_does_not_enable_lora_by_itself(tmp_path, monkeypatch):
     lora_dir = tmp_path / "loras"
     lora_dir.mkdir()
