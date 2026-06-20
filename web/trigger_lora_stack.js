@@ -1,4 +1,5 @@
 import { app } from "../../../scripts/app.js";
+import { api } from "../../../scripts/api.js";
 
 const MAX_TRIGGER_LORAS = 30;
 const HIDDEN_WIDGET_HEIGHT = -4;
@@ -6,6 +7,7 @@ const COMPACT_TEXT_HEIGHT = 26;
 const COMPACT_ROW_HEIGHT = 16;
 const COMPACT_ROW_GAP = 2;
 const RESIZE_GUARD_INTERVAL_MS = 150;
+const AUTO_TRIGGER_PROP = "_glow_trigger_lora_auto_triggers";
 
 function getWidget(node, name) {
     return node?.widgets?.find((widget) => widget.name === name);
@@ -90,6 +92,17 @@ function compactInputTextWidget(node) {
     }, 50);
 }
 
+function compactLoraTriggerWidgets(node) {
+    for (let i = 1; i <= MAX_TRIGGER_LORAS; i++) {
+        const widget = getWidget(node, `lora_trigger_${i}`);
+        if (!widget) continue;
+        widget.computeSize = (width) => [width, COMPACT_TEXT_HEIGHT];
+        compactTextElement(widget.inputEl);
+        compactTextElement(widget.element);
+        compactTextElement(widget.el);
+    }
+}
+
 function getVisibleWidgets(node) {
     return (node.widgets || []).filter((widget) => widget.type !== "hidden" && !widget.hidden);
 }
@@ -132,7 +145,8 @@ function localizeWidgets(node) {
         labels[`lora_name_${i}`] = `LoRA ${i}`;
         labels[`model_weight_${i}`] = `模型权重 ${i}`;
         labels[`clip_weight_${i}`] = `CLIP权重 ${i}`;
-        labels[`trigger_${i}`] = `触发词 ${i}`;
+        labels[`trigger_${i}`] = `匹配词 ${i}`;
+        labels[`lora_trigger_${i}`] = `LoRA触发词 ${i}`;
     }
     for (const widget of node.widgets || []) {
         if (labels[widget.name]) widget.label = labels[widget.name];
@@ -146,14 +160,14 @@ function localizeWidgets(node) {
 
 function estimateCompactHeight(node) {
     const count = clampCount(getWidget(node, "lora_count")?.value ?? 0);
-    const visibleWidgetRows = 2 + count * 5; // lora_count + input_text + 5 controls per LoRA
+    const visibleWidgetRows = 2 + count * 6; // lora_count + input_text + 6 controls per LoRA
     const widgetHeight =
         26 +
         COMPACT_ROW_HEIGHT +
         COMPACT_TEXT_HEIGHT +
-        count * 5 * COMPACT_ROW_HEIGHT +
+        count * 6 * COMPACT_ROW_HEIGHT +
         visibleWidgetRows * COMPACT_ROW_GAP;
-    const slotRows = Math.max(count + 2, 3);
+    const slotRows = Math.max(count + 2, 5);
     const slotHeight = 24 + slotRows * 16;
     return Math.ceil(Math.max(widgetHeight, slotHeight, 140) + 8);
 }
@@ -296,9 +310,92 @@ function scheduleSizeGuard(node) {
     }
 }
 
+function getAutoTriggerState(node, index) {
+    return node?.properties?.[AUTO_TRIGGER_PROP]?.[String(index)] || null;
+}
+
+function setAutoTriggerState(node, index, loraName, trigger) {
+    if (!node) return;
+    node.properties = node.properties || {};
+    node.properties[AUTO_TRIGGER_PROP] = node.properties[AUTO_TRIGGER_PROP] || {};
+    node.properties[AUTO_TRIGGER_PROP][String(index)] = {
+        lora_name: loraName || "None",
+        trigger: trigger || "",
+    };
+}
+
+function setWidgetValue(widget, value) {
+    if (!widget) return;
+    widget.value = value || "";
+    widget.callback?.(widget.value);
+}
+
+async function fetchLoraTrigger(loraName) {
+    if (!loraName || loraName === "None") return "";
+    try {
+        const resp = await api.fetchApi("/glowloader/lora_trigger", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lora_name: loraName }),
+        });
+        if (!resp.ok) return "";
+        const json = await resp.json();
+        return json.trigger || "";
+    } catch (error) {
+        console.warn("[GlowTriggerLoRAStack] failed to load lora trigger", error);
+        return "";
+    }
+}
+
+async function syncLoraTriggerWidget(node, index, { force = false } = {}) {
+    const loraWidget = getWidget(node, `lora_name_${index}`);
+    const triggerWidget = getWidget(node, `lora_trigger_${index}`);
+    if (!loraWidget || !triggerWidget) return;
+
+    const loraName = loraWidget.value || "None";
+    const current = triggerWidget.value || "";
+    const state = getAutoTriggerState(node, index);
+    const shouldReplace =
+        force ||
+        current === "" ||
+        (state && state.lora_name === loraName && current === (state.trigger || ""));
+
+    if (!shouldReplace) return;
+
+    const trigger = await fetchLoraTrigger(loraName);
+    const nextLoraName = loraWidget.value || "None";
+    if (nextLoraName !== loraName) return;
+
+    setWidgetValue(triggerWidget, trigger);
+    setAutoTriggerState(node, index, loraName, trigger);
+    app.graph.setDirtyCanvas(true, true);
+}
+
+function installLoraNameCallbacks(node) {
+    for (let i = 1; i <= MAX_TRIGGER_LORAS; i++) {
+        const widget = getWidget(node, `lora_name_${i}`);
+        if (!widget || widget._glowTriggerLoraNameCallbackInstalled) continue;
+        widget._glowTriggerLoraNameCallbackInstalled = true;
+        const originalCallback = widget.callback;
+        widget.callback = function (value) {
+            originalCallback?.call(this, value);
+            syncLoraTriggerWidget(node, i, { force: true });
+        };
+    }
+}
+
+function syncVisibleLoraTriggers(node) {
+    const count = clampCount(getWidget(node, "lora_count")?.value ?? 0);
+    for (let i = 1; i <= count; i++) {
+        syncLoraTriggerWidget(node, i);
+    }
+}
+
 function updateVisibleGroups(node) {
     installCompactSizing(node);
     compactInputTextWidget(node);
+    compactLoraTriggerWidgets(node);
+    installLoraNameCallbacks(node);
     const count = clampCount(getWidget(node, "lora_count")?.value ?? 0);
     removeInput(node, "trigger_text_in");
     for (let i = 1; i <= MAX_TRIGGER_LORAS; i++) {
@@ -309,6 +406,7 @@ function updateVisibleGroups(node) {
             `model_weight_${i}`,
             `clip_weight_${i}`,
             `trigger_${i}`,
+            `lora_trigger_${i}`,
         ]) {
             setWidgetVisible(getWidget(node, name), visible);
         }
@@ -322,6 +420,7 @@ function updateVisibleGroups(node) {
     }
     localizeWidgets(node);
     scheduleResize(node);
+    syncVisibleLoraTriggers(node);
     app.graph.setDirtyCanvas(true, true);
 }
 

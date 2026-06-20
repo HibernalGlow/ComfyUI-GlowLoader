@@ -1,3 +1,4 @@
+import os
 import re
 
 import folder_paths
@@ -37,6 +38,108 @@ def _trigger_matches(source_text, trigger):
     return any(token.casefold() in haystack for token in triggers)
 
 
+def _collapse_trigger_line(trigger):
+    return ", ".join(part.strip() for part in str(trigger or "").splitlines() if part.strip())
+
+
+def _safe_lora_relative_path(lora_name):
+    if not lora_name or lora_name == "None":
+        return None
+    rel = str(lora_name).replace("\\", "/").strip()
+    if not rel:
+        return None
+    rel = os.path.normpath(rel)
+    if os.path.isabs(rel) or rel == "." or rel.startswith(".."):
+        return None
+    return rel
+
+
+def _get_lora_root_paths():
+    get_folder_paths = getattr(folder_paths, "get_folder_paths", None)
+    if callable(get_folder_paths):
+        try:
+            return list(get_folder_paths("loras") or [])
+        except Exception:
+            pass
+
+    folder_names_and_paths = getattr(folder_paths, "folder_names_and_paths", None)
+    if isinstance(folder_names_and_paths, dict):
+        entry = folder_names_and_paths.get("loras")
+        if entry:
+            paths = entry[0] if isinstance(entry, (list, tuple)) else entry
+            if isinstance(paths, (list, tuple)):
+                return list(paths)
+            return [paths]
+    return []
+
+
+def _candidate_lora_trigger_paths(lora_name):
+    rel_lora = _safe_lora_relative_path(lora_name)
+    if not rel_lora:
+        return []
+
+    candidates = []
+    rel_trigger = os.path.splitext(rel_lora)[0] + ".trigger.txt"
+
+    get_full_path = getattr(folder_paths, "get_full_path", None)
+    if callable(get_full_path):
+        try:
+            lora_path = get_full_path("loras", rel_lora)
+            if lora_path:
+                candidates.append(os.path.splitext(lora_path)[0] + ".trigger.txt")
+        except Exception:
+            pass
+        try:
+            trigger_path = get_full_path("loras", rel_trigger)
+            if trigger_path:
+                candidates.append(trigger_path)
+        except Exception:
+            pass
+
+    for root in _get_lora_root_paths():
+        if not root:
+            continue
+        root = os.path.abspath(str(root))
+        path = os.path.abspath(os.path.join(root, rel_trigger))
+        try:
+            if os.path.commonpath([root, path]) == root:
+                candidates.append(path)
+        except ValueError:
+            continue
+
+    seen = set()
+    result = []
+    for path in candidates:
+        if not path:
+            continue
+        normalized = os.path.normcase(os.path.abspath(str(path)))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(path)
+    return result
+
+
+def read_lora_trigger_file(lora_name):
+    for path in _candidate_lora_trigger_paths(lora_name):
+        if not os.path.isfile(path):
+            continue
+        for encoding in ("utf-8-sig", "utf-8"):
+            try:
+                with open(path, "r", encoding=encoding) as f:
+                    return f.read().strip()
+            except UnicodeDecodeError:
+                continue
+            except OSError:
+                break
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                return f.read().strip()
+        except OSError:
+            continue
+    return ""
+
+
 class _InputTextInputs(dict):
     def __contains__(self, key):
         name = str(key or "")
@@ -73,6 +176,7 @@ class GlowTriggerLoRAStack:
                 {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01},
             )
             required[f"trigger_{index}"] = ("STRING", {"default": ""})
+            required[f"lora_trigger_{index}"] = ("STRING", {"default": "", "multiline": False})
 
         optional = _InputTextInputs({
             "lora_stack": ("LORA_STACK",),
@@ -80,10 +184,20 @@ class GlowTriggerLoRAStack:
         })
         return {"required": required, "optional": optional}
 
-    RETURN_TYPES = ("LORA_STACK", "STRING", "STRING")
-    RETURN_NAMES = ("LORA_STACK", "active_loras", "show_help")
+    RETURN_TYPES = ("LORA_STACK", "STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = (
+        "LORA_STACK",
+        "active_loras",
+        "show_help",
+        "active_trigger_words",
+        "all_trigger_words",
+    )
     FUNCTION = "build_lora_stack"
     CATEGORY = "ComfyUI-GlowLoader/LoRA"
+
+    @staticmethod
+    def read_lora_trigger(lora_name):
+        return read_lora_trigger_file(lora_name)
 
     def build_lora_stack(self, lora_count=3, input_text="", lora_stack=None, input_text_in=None, **kwargs):
         try:
@@ -98,11 +212,21 @@ class GlowTriggerLoRAStack:
 
         global_text = input_text_in if input_text_in not in (None, "") else input_text
         active_names = []
+        active_trigger_lines = []
+        all_trigger_lines = []
 
         for index in range(1, count + 1):
             lora_name = kwargs.get(f"lora_name_{index}", "None")
             if not lora_name or lora_name == "None":
                 continue
+
+            if f"lora_trigger_{index}" in kwargs:
+                own_trigger = str(kwargs.get(f"lora_trigger_{index}") or "").strip()
+            else:
+                own_trigger = read_lora_trigger_file(lora_name)
+            own_trigger_line = _collapse_trigger_line(own_trigger)
+            if own_trigger_line:
+                all_trigger_lines.append(own_trigger_line)
 
             enabled = _normalize_bool(kwargs.get(f"enable_{index}", True), True)
             if not enabled:
@@ -118,9 +242,17 @@ class GlowTriggerLoRAStack:
             clip_weight = float(kwargs.get(f"clip_weight_{index}", 1.0))
             lora_list.append((lora_name, model_weight, clip_weight))
             active_names.append(lora_name)
+            if own_trigger_line:
+                active_trigger_lines.append(own_trigger_line)
 
         show_help = (
-            "enable_N controls the LoRA switch. trigger_N is matched against input_text_in/"
-            "input_text, or input_text_N when that per-LoRA input is connected."
+            "trigger_N is the prompt matching switch. lora_trigger_N is the LoRA's own "
+            "trigger words, usually auto-loaded from the same-name .trigger.txt file."
         )
-        return (lora_list, ", ".join(active_names), show_help)
+        return (
+            lora_list,
+            ", ".join(active_names),
+            show_help,
+            "\n".join(active_trigger_lines),
+            "\n".join(all_trigger_lines),
+        )

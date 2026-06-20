@@ -361,6 +361,20 @@ if PromptServer is not None:
                 {"error": str(e)}, status=500
             )
 
+    @PromptServer.instance.routes.post("/glowloader/lora_trigger")
+    async def api_lora_trigger(request):
+        try:
+            data = await request.json()
+            lora_name = data.get("lora_name", "")
+            trigger = ""
+            if GlowTriggerLoRAStack is not None:
+                trigger = GlowTriggerLoRAStack.read_lora_trigger(lora_name)
+            return web.json_response({"trigger": trigger})
+        except Exception as e:
+            return web.json_response(
+                {"error": str(e)}, status=500
+            )
+
     @PromptServer.instance.routes.post("/glowloader/batch/submit")
     async def api_batch_submit(request):
         try:
