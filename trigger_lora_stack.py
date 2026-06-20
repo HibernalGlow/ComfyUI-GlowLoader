@@ -27,7 +27,7 @@ def _split_triggers(trigger):
     text = str(trigger or "").strip()
     if not text:
         return []
-    return [part.strip() for part in re.split(r"[\n,|;]+", text) if part.strip()]
+    return [part.strip() for part in re.split(r"[\n,，、|;；]+", text) if part.strip()]
 
 
 def _trigger_matches(source_text, trigger):

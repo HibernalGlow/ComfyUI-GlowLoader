@@ -42,6 +42,40 @@ def test_per_lora_input_text_overrides_global_text():
     assert active == "cat_ears.safetensors"
 
 
+def test_prompt_match_trigger_supports_comma_separated_aliases():
+    node = GlowTriggerLoRAStack()
+
+    stack, active, *_ = node.build_lora_stack(
+        lora_count=1,
+        input_text="portrait with animal ears",
+        enable_1=True,
+        lora_name_1="cat_ears.safetensors",
+        model_weight_1=1.0,
+        clip_weight_1=1.0,
+        trigger_1="cat ears, animal ears, kemonomimi",
+    )
+
+    assert stack == [("cat_ears.safetensors", 1.0, 1.0)]
+    assert active == "cat_ears.safetensors"
+
+
+def test_prompt_match_trigger_supports_chinese_comma_aliases():
+    node = GlowTriggerLoRAStack()
+
+    stack, active, *_ = node.build_lora_stack(
+        lora_count=1,
+        input_text="portrait with animal ears",
+        enable_1=True,
+        lora_name_1="cat_ears.safetensors",
+        model_weight_1=1.0,
+        clip_weight_1=1.0,
+        trigger_1="cat ears，animal ears、kemonomimi",
+    )
+
+    assert stack == [("cat_ears.safetensors", 1.0, 1.0)]
+    assert active == "cat_ears.safetensors"
+
+
 def test_disabled_switch_blocks_lora_even_when_trigger_matches():
     node = GlowTriggerLoRAStack()
 
