@@ -23,6 +23,15 @@ def _normalize_bool(value, default=False):
     return default
 
 
+def _safe_float(value, default=1.0):
+    if isinstance(value, str) and value.strip().casefold() in ("", "none", "null"):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _split_triggers(trigger):
     text = str(trigger or "").strip()
     if not text:
@@ -248,8 +257,8 @@ class GlowTriggerLoRAStack:
             if not _trigger_matches(source_text, trigger):
                 continue
 
-            model_weight = float(kwargs.get(f"model_weight_{index}", 1.0))
-            clip_weight = float(kwargs.get(f"clip_weight_{index}", 1.0))
+            model_weight = _safe_float(kwargs.get(f"model_weight_{index}", 1.0), 1.0)
+            clip_weight = _safe_float(kwargs.get(f"clip_weight_{index}", 1.0), 1.0)
             lora_list.append((lora_name, model_weight, clip_weight))
             active_names.append(lora_name)
             if own_trigger_line:

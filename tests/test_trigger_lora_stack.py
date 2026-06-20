@@ -76,6 +76,33 @@ def test_prompt_match_trigger_supports_chinese_comma_aliases():
     assert active == "cat_ears.safetensors"
 
 
+def test_invalid_weight_values_fall_back_to_one():
+    node = GlowTriggerLoRAStack()
+
+    stack, active, *_ = node.build_lora_stack(
+        lora_count=1,
+        input_text="cat ears",
+        enable_1=True,
+        lora_name_1="cat_ears.safetensors",
+        model_weight_1="None",
+        clip_weight_1=None,
+        trigger_1="cat ears",
+    )
+
+    assert stack == [("cat_ears.safetensors", 1.0, 1.0)]
+    assert active == "cat_ears.safetensors"
+
+
+def test_lora_trigger_widgets_are_grouped_with_each_lora(monkeypatch):
+    monkeypatch.setattr(trigger_lora_stack.folder_paths, "get_filename_list", lambda name: [], raising=False)
+
+    required = GlowTriggerLoRAStack.INPUT_TYPES()["required"]
+    keys = list(required.keys())
+
+    assert keys.index("trigger_1") < keys.index("lora_trigger_1")
+    assert keys.index("lora_trigger_1") < keys.index("enable_2")
+
+
 def test_disabled_switch_blocks_lora_even_when_trigger_matches():
     node = GlowTriggerLoRAStack()
 

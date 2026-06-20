@@ -8,13 +8,91 @@ const COMPACT_ROW_HEIGHT = 16;
 const COMPACT_ROW_GAP = 2;
 const RESIZE_GUARD_INTERVAL_MS = 150;
 const AUTO_TRIGGER_PROP = "_glow_trigger_lora_auto_triggers";
+const LEGACY_WIDGET_COUNT = 2 + MAX_TRIGGER_LORAS * 5;
+const CURRENT_WIDGET_COUNT = 2 + MAX_TRIGGER_LORAS * 6;
 
 function getWidget(node, name) {
     return node?.widgets?.find((widget) => widget.name === name);
 }
 
+function isWeightWidgetName(name) {
+    return /^model_weight_\d+$/.test(name || "") || /^clip_weight_\d+$/.test(name || "");
+}
+
+function normalizeWeightValue(value, fallback = 1.0) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (!trimmed || trimmed.toLowerCase() === "none" || trimmed.toLowerCase() === "null") return fallback;
+        const parsed = Number(trimmed);
+        return Number.isFinite(parsed) ? parsed : fallback;
+    }
+    return fallback;
+}
+
+function sanitizeWeightWidget(widget) {
+    if (!widget || !isWeightWidgetName(widget.name)) return false;
+    const next = normalizeWeightValue(widget.value, 1.0);
+    if (widget.value === next) return false;
+    widget.value = next;
+    if (widget.inputEl) widget.inputEl.value = String(next);
+    return true;
+}
+
+function sanitizeWeightWidgets(node) {
+    let changed = false;
+    for (const widget of node?.widgets || []) {
+        changed = sanitizeWeightWidget(widget) || changed;
+    }
+    return changed;
+}
+
+function legacyWidgetNames() {
+    const names = ["lora_count", "input_text"];
+    for (let i = 1; i <= MAX_TRIGGER_LORAS; i++) {
+        names.push(
+            `enable_${i}`,
+            `lora_name_${i}`,
+            `model_weight_${i}`,
+            `clip_weight_${i}`,
+            `trigger_${i}`
+        );
+    }
+    return names;
+}
+
+function setRawWidgetValue(widget, value) {
+    if (!widget) return;
+    widget.value = value;
+    if (widget.inputEl) widget.inputEl.value = value == null ? "" : String(value);
+}
+
+function migrateLegacyWidgetValues(node, serialized) {
+    const values = serialized?.widgets_values;
+    if (!Array.isArray(values) || values.length < LEGACY_WIDGET_COUNT) return false;
+
+    const loraTrigger1Slot = values[7];
+    if (typeof loraTrigger1Slot !== "boolean") return false;
+
+    const byName = new Map((node.widgets || []).map((widget) => [widget.name, widget]));
+    const legacyNames = legacyWidgetNames();
+    for (let index = 0; index < legacyNames.length; index++) {
+        setRawWidgetValue(byName.get(legacyNames[index]), values[index]);
+    }
+
+    const hasTailTriggers = values.length >= CURRENT_WIDGET_COUNT;
+    for (let i = 1; i <= MAX_TRIGGER_LORAS; i++) {
+        const value = hasTailTriggers ? values[LEGACY_WIDGET_COUNT + i - 1] : "";
+        setRawWidgetValue(byName.get(`lora_trigger_${i}`), value || "");
+    }
+
+    sanitizeWeightWidgets(node);
+    return true;
+}
+
 function setWidgetVisible(widget, visible) {
     if (!widget) return;
+    sanitizeWeightWidget(widget);
     if (!widget._glowTriggerLoraOriginal) {
         widget._glowTriggerLoraOriginal = {
             type: widget.type,
@@ -33,7 +111,10 @@ function setWidgetVisible(widget, visible) {
         widget.hidden = true;
         if (widget.options) widget.options.hidden = true;
         widget.computeSize = () => [0, HIDDEN_WIDGET_HEIGHT];
-        widget.serializeValue = widget._glowTriggerLoraOriginal.serializeValue || (() => widget.value);
+        widget.serializeValue = () => {
+            sanitizeWeightWidget(widget);
+            return widget._glowTriggerLoraOriginal.serializeValue?.call(widget) ?? widget.value;
+        };
     }
 }
 
@@ -197,6 +278,7 @@ function installCompactSizing(node) {
 
     const originalOnSerialize = node.onSerialize;
     node.onSerialize = function (serialized) {
+        sanitizeWeightWidgets(this);
         const result = originalOnSerialize?.apply(this, arguments);
         applyCompactSize(this, serialized);
         return result;
@@ -205,6 +287,7 @@ function installCompactSizing(node) {
     const originalSerialize = node.serialize;
     if (typeof originalSerialize === "function") {
         node.serialize = function () {
+            sanitizeWeightWidgets(this);
             const serialized = originalSerialize.apply(this, arguments);
             applyCompactSize(this, serialized);
             return serialized;
@@ -392,6 +475,7 @@ function syncVisibleLoraTriggers(node) {
 }
 
 function updateVisibleGroups(node) {
+    sanitizeWeightWidgets(node);
     installCompactSizing(node);
     compactInputTextWidget(node);
     compactLoraTriggerWidgets(node);
@@ -432,6 +516,7 @@ app.registerExtension({
         const origOnNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const result = origOnNodeCreated?.apply(this, arguments);
+            sanitizeWeightWidgets(this);
             localizeWidgets(this);
             const node = this;
             const countWidget = getWidget(this, "lora_count");
@@ -450,6 +535,8 @@ app.registerExtension({
         const origOnConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             const result = origOnConfigure?.apply(this, arguments);
+            migrateLegacyWidgetValues(this, arguments[0]);
+            sanitizeWeightWidgets(this);
             localizeWidgets(this);
             updateVisibleGroups(this);
             return result;
@@ -459,6 +546,7 @@ app.registerExtension({
     loadedGraphNode(node) {
         const nodeName = node.comfyClass || node.type || node.constructor?.nodeData?.name;
         if (nodeName !== "GlowTriggerLoRAStack") return;
+        sanitizeWeightWidgets(node);
         updateVisibleGroups(node);
     },
 });
