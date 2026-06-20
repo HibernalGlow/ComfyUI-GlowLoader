@@ -195,6 +195,24 @@ class TestBatchLoadImages:
         from batch_load_images import BatchLoadImages
         return BatchLoadImages()
 
+    def test_seed_widget_does_not_auto_increment(self):
+        from batch_load_images import BatchLoadImages
+
+        seed_options = BatchLoadImages.INPUT_TYPES()["optional"]["seed"][1]
+
+        assert seed_options["default"] == -1
+        assert "control_after_generate" not in seed_options
+
+    def test_random_seed_mode_changes_cache_key(self):
+        from batch_load_images import BatchLoadImages
+
+        args = ("missing.png", 0, "single", 0)
+
+        first = BatchLoadImages.IS_CHANGED(*args, seed=-1)
+        second = BatchLoadImages.IS_CHANGED(*args, seed=-1)
+
+        assert first != second
+
     def test_load_flat(self, tmp_path):
         _make_test_image(str(tmp_path / "img1.png"), color=(255, 0, 0))
         _make_test_image(str(tmp_path / "img2.png"), color=(0, 255, 0))

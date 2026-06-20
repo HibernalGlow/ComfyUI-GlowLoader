@@ -194,6 +194,10 @@ function getSeedValue(node) {
     return typeof v === "number" ? v : -1;
 }
 
+function randomSeedValue() {
+    return Math.floor(Math.random() * 2147483647);
+}
+
 function deepClone(obj) {
     return QueueManager.deepClone(obj);
 }
@@ -251,7 +255,31 @@ function getCameraDataWidget(node) {
 
 async function queueCurrent(node) {
     const prompt = await QueueManager.getPrompt();
+    const index = readIntWidget(node, "index", 0, 0, 100000);
+    const seed = getSeedValue(node);
+    patchImagePrompt(prompt, node, index, {
+        seedValue: seed === -1 ? randomSeedValue() : undefined,
+        shuffle: false,
+    });
     await QueueManager.enqueuePrompt(prompt);
+}
+
+function patchImagePrompt(prompt, node, index, { seedValue, shuffle, allowDuplicate } = {}) {
+    const nodeId = String(node.id);
+    const apiNode = prompt.output?.[nodeId];
+    if (!apiNode) return;
+    apiNode.inputs = apiNode.inputs || {};
+    apiNode.inputs.mode = "single";
+    apiNode.inputs.index = index;
+    if (seedValue !== undefined) {
+        apiNode.inputs.seed = seedValue;
+    }
+    if (shuffle !== undefined) {
+        apiNode.inputs.shuffle = shuffle;
+    }
+    if (allowDuplicate !== undefined) {
+        apiNode.inputs.allow_duplicate = allowDuplicate;
+    }
 }
 
 // 从节点自身读取队列阈值
@@ -365,7 +393,9 @@ async function queueAllSequential(node) {
             apiNode.inputs = apiNode.inputs || {};
             apiNode.inputs.mode = "single";
             apiNode.inputs.index = i;
+            apiNode.inputs.shuffle = false;
             apiNode.inputs.allow_duplicate = true;
+            if (getSeedValue(node) === -1) apiNode.inputs.seed = randomSeedValue();
             prompts.push(prompt);
         }
         return submitPromptBatch(node, "逐张入队", prompts);
@@ -393,7 +423,13 @@ async function queueAllSequential(node) {
             wIndex.value = i;
             wIndex.callback?.(wIndex.value);
             QueueManager.invalidatePromptCache();
-            prompts.push(deepClone(await QueueManager.getPrompt()));
+            const prompt = deepClone(await QueueManager.getPrompt());
+            patchImagePrompt(prompt, node, i, {
+                seedValue: prevSeed === -1 ? randomSeedValue() : undefined,
+                shuffle: false,
+                allowDuplicate: true,
+            });
+            prompts.push(prompt);
         }
     } finally {
         wMode.value = prevMode;
@@ -494,8 +530,9 @@ async function queueAllShuffled(node) {
             apiNode.inputs = apiNode.inputs || {};
             apiNode.inputs.mode = "single";
             apiNode.inputs.index = idx;
-            apiNode.inputs.shuffle = true;
+            apiNode.inputs.shuffle = false;
             apiNode.inputs.allow_duplicate = allowDuplicate;
+            if (seed === -1) apiNode.inputs.seed = randomSeedValue();
             prompts.push(prompt);
         }
         return submitPromptBatch(node, "乱序入队", prompts);
@@ -523,7 +560,13 @@ async function queueAllShuffled(node) {
             wIndex.value = indices[i];
             wIndex.callback?.(wIndex.value);
             QueueManager.invalidatePromptCache();
-            prompts.push(deepClone(await QueueManager.getPrompt()));
+            const prompt = deepClone(await QueueManager.getPrompt());
+            patchImagePrompt(prompt, node, indices[i], {
+                seedValue: prevSeed === -1 ? randomSeedValue() : undefined,
+                shuffle: false,
+                allowDuplicate,
+            });
+            prompts.push(prompt);
         }
     } finally {
         wMode.value = prevMode;

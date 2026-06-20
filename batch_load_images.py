@@ -1,6 +1,7 @@
 import os
 import hashlib
 import json
+import random
 
 import numpy as np
 import torch
@@ -22,6 +23,15 @@ SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".avif", ".bmp", ".gif
 # Example:  photo.png|sub/deep/photo.png
 # If no | is present, the original_relative_path equals the comfy_filename.
 PATH_SEPARATOR = "|"
+
+
+def _normalize_seed(value, default=-1):
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _sanitize_relpath(relpath):
@@ -108,7 +118,7 @@ class BatchLoadImages:
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
             },
             "optional": {
-                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "control_after_generate": True}),
+                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "step": 1}),
                 "queue_count": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "shuffle": ("BOOLEAN", {"default": False}),
                 "allow_duplicate": ("BOOLEAN", {"default": True}),
@@ -139,9 +149,8 @@ class BatchLoadImages:
             check_interval_ms = 1000
 
         # 确定实际使用的种子：seed==-1 或 None 时生成随机种子
-        import random as _random
-        seed = seed if seed is not None else -1
-        effective_seed = seed if seed >= 0 else _random.randint(0, 2147483647)
+        seed = _normalize_seed(seed, -1)
+        effective_seed = seed if seed >= 0 else random.randint(0, 2147483647)
 
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
@@ -256,7 +265,8 @@ class BatchLoadImages:
     def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
                    queue_count: int = 0, shuffle: bool = False, allow_duplicate: bool = True,
                    trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
-        seed = seed if seed is not None else -1
+        seed = _normalize_seed(seed, -1)
+        effective_seed = seed if seed >= 0 else random.randint(0, 2147483647)
         m = hashlib.sha256()
         entries = [_parse_image_list_entry(x) for x in (image_list or "").splitlines()]
         entries = [(c, p) for c, p in entries if c]
@@ -264,7 +274,7 @@ class BatchLoadImages:
             entries = entries[:max_images]
 
         if mode == "single":
-            effective_index = s._resolve_index(len(entries), index, shuffle, allow_duplicate, seed)
+            effective_index = s._resolve_index(len(entries), index, shuffle, allow_duplicate, effective_seed)
             if effective_index < 0:
                 effective_index = 0
             if effective_index >= len(entries):
@@ -274,7 +284,7 @@ class BatchLoadImages:
         m.update(str(mode).encode("utf-8"))
         m.update(str(index).encode("utf-8"))
         m.update(str(max_images).encode("utf-8"))
-        m.update(str(seed).encode("utf-8"))
+        m.update(str(effective_seed).encode("utf-8"))
         m.update(str(shuffle).encode("utf-8"))
         m.update(str(allow_duplicate).encode("utf-8"))
         for comfy_name, original_relpath in entries:
@@ -291,7 +301,7 @@ class BatchLoadImages:
     def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int, seed: int = -1,
                         queue_count: int = 0, shuffle: bool = False, allow_duplicate: bool = True,
                         trigger: bool = True, queue_threshold: int = 199, check_interval_ms: int = 1000):
-        seed = seed if seed is not None else -1
+        seed = _normalize_seed(seed, -1)
         # 防御 None 值：可选输入未连接时可能传入 None
         index = 0 if index is None else index
         shuffle = True if shuffle else False

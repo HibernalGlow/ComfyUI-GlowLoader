@@ -39,6 +39,15 @@ def _normalize_bool(value, default=False):
     return default
 
 
+def _normalize_seed(value, default=-1):
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _sanitize_relpath(relpath):
     """Sanitize a relative path to prevent path traversal and normalize separators."""
     if not relpath:
@@ -99,7 +108,7 @@ class BatchLoadTexts:
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
             },
             "optional": {
-                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "control_after_generate": True}),
+                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647, "step": 1}),
                 "queue_count": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "shuffle": ("BOOLEAN", {"default": False}),
                 "allow_duplicate": ("BOOLEAN", {"default": True}),
@@ -158,6 +167,7 @@ class BatchLoadTexts:
         loop_index = 0
 
         # 确定实际使用的种子：seed==-1 时生成随机种子
+        seed = _normalize_seed(seed, -1)
         effective_seed = seed if seed >= 0 else random.randint(0, 2147483647)
 
         # 普通 ComfyUI 执行也必须按 index 指向当前文本；mode 只保留为兼容字段。
@@ -255,6 +265,7 @@ class BatchLoadTexts:
         m = hashlib.sha256()
         shuffle = _normalize_bool(shuffle, False)
         allow_duplicate = _normalize_bool(allow_duplicate, True)
+        seed = _normalize_seed(seed, -1)
         
         # 计算 entries 用于 hash
         if source_mode == "direct":
@@ -293,7 +304,8 @@ class BatchLoadTexts:
         m.update(str(queue_count).encode("utf-8"))
         m.update(str(shuffle).encode("utf-8"))
         m.update(str(allow_duplicate).encode("utf-8"))
-        m.update(str(seed).encode("utf-8"))
+        seed_hash = seed if seed >= 0 else random.randint(0, 2147483647)
+        m.update(str(seed_hash).encode("utf-8"))
         for entry in entries:
             m.update(entry.encode("utf-8") if isinstance(entry, str) else entry)
 

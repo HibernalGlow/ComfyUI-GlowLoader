@@ -103,6 +103,20 @@ class TestBatchLoadTexts:
         assert result[0] == "line1"
         assert result[2] == 1
 
+    def test_seed_widget_does_not_auto_increment(self):
+        seed_options = BatchLoadTexts.INPUT_TYPES()["optional"]["seed"][1]
+
+        assert seed_options["default"] == -1
+        assert "control_after_generate" not in seed_options
+
+    def test_random_seed_mode_changes_cache_key(self):
+        args = ("direct", "line0\nline1", "one_per_file", 0, "single", 0)
+
+        first = BatchLoadTexts.IS_CHANGED(*args, seed=-1)
+        second = BatchLoadTexts.IS_CHANGED(*args, seed=-1)
+
+        assert first != second
+
 
 class TestGenerateQueueSequence:
     """测试 generate_queue_sequence 方法"""
